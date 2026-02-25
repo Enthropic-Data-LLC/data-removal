@@ -285,8 +285,12 @@ class WhitepagesPlugin(BrokerPlugin):
     async def submit_opt_out(self, listing: Listing) -> bool:
         """Submit a removal request via Whitepages suppression form.
 
-        Automates form filling up to the phone verification step, then
-        prompts the user to answer the automated call and enter the code.
+        Automates the 5-step flow:
+          1. Paste profile URL → Next
+          2. Confirm identity → "Remove Me"
+          3. Select reason → Next
+          4. Phone verification (user must answer call and enter code)
+          5. Confirmation
         """
         if not HAS_PLAYWRIGHT:
             log.warning("Playwright not installed — cannot submit opt-out")
@@ -310,53 +314,58 @@ class WhitepagesPlugin(BrokerPlugin):
                         log.error("Could not pass captcha on suppression page")
                         return False
 
-                    # Step 2: Paste listing URL and click Next
-                    url_input = page.locator(
-                        'input[name="url"], '
-                        'input[placeholder*="whitepages.com"], '
-                        'input[type="url"], '
-                        "input.suppression-input"
-                    ).first
+                    # Step 1: Paste listing URL and click Next
+                    url_input = page.locator('input[placeholder*="Copy and paste"]').first
                     await url_input.fill(listing.url)
 
-                    next_btn = page.locator(
-                        'button:has-text("Next"), button:has-text("next"), input[type="submit"]'
-                    ).first
+                    next_btn = page.locator('button:has-text("Next")').first
                     await next_btn.click(timeout=PAGE_TIMEOUT_MS)
                     await page.wait_for_load_state("domcontentloaded")
+
+                    # Check for "not able to locate" error
+                    error_el = page.locator("text=/not able to locate/i")
+                    if await error_el.count() > 0:
+                        log.error("Whitepages could not locate listing for URL: %s", listing.url)
+                        return False
 
                     if not await _handle_captcha(page, description="profile confirm"):
                         return False
 
-                    # Step 3: Click "Remove Me"
-                    remove_btn = page.locator(
-                        'button:has-text("Remove Me"), '
-                        'button:has-text("Remove me"), '
-                        'a:has-text("Remove Me")'
-                    ).first
+                    # Step 2: Click "Remove Me"
+                    remove_btn = page.locator('button:has-text("Remove Me")').first
                     await remove_btn.click(timeout=PAGE_TIMEOUT_MS)
-                    await page.wait_for_load_state("domcontentloaded")
 
-                    # Step 4: Select reason (if dropdown appears)
+                    # Step 3: Select reason and click Next
+                    reason_select = page.locator("select, combobox").first
                     try:
-                        reason_select = page.locator("select, [role='listbox']").first
-                        await reason_select.select_option(index=1, timeout=5000)
+                        await reason_select.select_option(
+                            label="I just want to keep my information private",
+                            timeout=10_000,
+                        )
                     except Exception:
-                        log.debug("No reason dropdown found, continuing")
+                        # Fall back to selecting by index
+                        try:
+                            await reason_select.select_option(index=4, timeout=5000)
+                        except Exception:
+                            log.debug("Could not select reason, continuing")
 
-                    # Step 5: Phone verification — user must interact
+                    next_btn2 = page.locator('button:has-text("Next")').first
+                    await next_btn2.click(timeout=PAGE_TIMEOUT_MS)
+
+                    # Step 4: Phone verification — user must interact
                     log.warning(
-                        "Phone verification required. Please complete the phone "
-                        "call verification in the browser window. "
-                        "Waiting up to %d seconds...",
+                        "Phone verification required. Please enter your phone "
+                        "number, check the box, and click 'Call now to verify' "
+                        "in the browser window. Waiting up to %d seconds...",
                         int(PHONE_VERIFY_TIMEOUT),
                     )
 
-                    # Wait for confirmation that verification is complete
+                    # Wait for Step 5 confirmation
                     try:
                         await page.wait_for_selector(
                             "text=/opt.?out.*complete|request.*received|"
-                            "successfully.*removed|removal.*confirmed/i",
+                            "successfully.*removed|removal.*confirmed|"
+                            "has been removed|step 5/i",
                             timeout=PHONE_VERIFY_TIMEOUT * 1000,
                         )
                     except Exception:
