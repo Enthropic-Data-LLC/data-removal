@@ -20,7 +20,6 @@ from dataremoval.core.models import Listing, Profile
 
 
 class TruePeopleSearchPlugin(BrokerPlugin):
-
     def info(self) -> BrokerInfo:
         return BrokerInfo(
             id="truepeoplesearch",
@@ -44,10 +43,10 @@ class TruePeopleSearchPlugin(BrokerPlugin):
         listings: list[Listing] = []
 
         for variant in profile.search_variants():
-            first = variant.get("first_name", "")
-            last = variant.get("last_name", "")
-            state = variant.get("state", "")
-            city = variant.get("city", "")
+            variant.get("first_name", "")
+            variant.get("last_name", "")
+            variant.get("state", "")
+            variant.get("city", "")
 
             # TODO: Actual HTTP request + HTML parsing
             # search_url = f"{self.info().url}/results"

@@ -17,24 +17,22 @@ from dataremoval.brokers import (
     BrokerPlugin,
     Difficulty,
     OptOutMethod,
-    register_broker,
 )
 from dataremoval.core.models import Listing, Profile
 
 
 class _TemplatePlugin(BrokerPlugin):
-
     def info(self) -> BrokerInfo:
         return BrokerInfo(
-            id="template",                              # unique slug
-            name="Template Site",                       # display name
-            url="https://example.com",                  # homepage
-            category="people_search",                   # people_search | background | marketing
-            opt_out_method=OptOutMethod.ONLINE_FORM,    # ONLINE_FORM | EMAIL | MAIL | ACCOUNT | API
-            opt_out_url="https://example.com/optout",   # direct link to opt-out
-            difficulty=Difficulty.MEDIUM,                # EASY | MEDIUM | HARD
-            expected_days=3,                            # typical removal time
-            recheck_days=90,                            # monitoring interval
+            id="template",  # unique slug
+            name="Template Site",  # display name
+            url="https://example.com",  # homepage
+            category="people_search",  # people_search | background | marketing
+            opt_out_method=OptOutMethod.ONLINE_FORM,  # ONLINE_FORM | EMAIL | MAIL | ACCOUNT | API
+            opt_out_url="https://example.com/optout",  # direct link to opt-out
+            difficulty=Difficulty.MEDIUM,  # EASY | MEDIUM | HARD
+            expected_days=3,  # typical removal time
+            recheck_days=90,  # monitoring interval
             notes="",
         )
 

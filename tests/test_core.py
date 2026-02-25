@@ -1,9 +1,8 @@
 """Tests for core models, state machine, and database."""
 
 import pytest
-import tempfile
-from pathlib import Path
 
+from dataremoval.core.database import Database
 from dataremoval.core.models import (
     Address,
     Listing,
@@ -11,12 +10,11 @@ from dataremoval.core.models import (
     RemovalRequest,
     RemovalState,
 )
-from dataremoval.core.database import Database
-
 
 # ---------------------------------------------------------------------------
 # Profile
 # ---------------------------------------------------------------------------
+
 
 def test_profile_full_name():
     p = Profile(first_name="John", last_name="Doe", middle_name="Q")
@@ -46,6 +44,7 @@ def test_profile_search_variants_no_address():
 # ---------------------------------------------------------------------------
 # State machine
 # ---------------------------------------------------------------------------
+
 
 def test_valid_transitions():
     req = RemovalRequest(listing_id="l1", broker_id="test", profile_id="p1")
@@ -90,6 +89,7 @@ def test_failure_retry():
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def db(tmp_path):

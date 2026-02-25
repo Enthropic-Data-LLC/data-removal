@@ -5,14 +5,13 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # User profile — the canonical representation of "who am I"
 # ---------------------------------------------------------------------------
+
 
 class Address(BaseModel):
     street: str = ""
@@ -34,7 +33,7 @@ class Profile(BaseModel):
     last_name: str
     middle_name: str = ""
     aliases: list[str] = Field(default_factory=list)
-    date_of_birth: str = ""          # YYYY-MM-DD
+    date_of_birth: str = ""  # YYYY-MM-DD
     age: int | None = None
     addresses: list[Address] = Field(default_factory=list)
     phone_numbers: list[str] = Field(default_factory=list)
@@ -71,26 +70,28 @@ class Profile(BaseModel):
 # Listing — a record found on a broker site
 # ---------------------------------------------------------------------------
 
+
 class Listing(BaseModel):
     """A single record found on a broker site."""
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    broker_id: str                     # e.g. "whitepages"
+    broker_id: str  # e.g. "whitepages"
     profile_id: str
-    url: str                           # direct link to the listing
+    url: str  # direct link to the listing
     found_name: str = ""
     found_location: str = ""
     found_age: str = ""
     raw_data: dict = Field(default_factory=dict)
     discovered_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    confidence: float = 0.0            # 0-1, how sure this is the right person
+    confidence: float = 0.0  # 0-1, how sure this is the right person
 
 
 # ---------------------------------------------------------------------------
 # Removal request — state machine for tracking opt-out progress
 # ---------------------------------------------------------------------------
 
-class RemovalState(str, enum.Enum):
+
+class RemovalState(enum.StrEnum):
     """
     State machine:
 
@@ -103,14 +104,14 @@ class RemovalState(str, enum.Enum):
                         (retry)     (retry)                   SUBMITTED
     """
 
-    DISCOVERED = "discovered"       # found on a broker site
-    SUBMITTED = "submitted"         # opt-out request sent
-    PENDING = "pending"             # waiting on broker response
-    CONFIRMED = "confirmed"         # broker acknowledged removal
-    MONITORING = "monitoring"       # periodic re-checks
-    RE_LISTED = "re_listed"         # data reappeared
-    FAILED = "failed"               # submission or verification failed
-    SKIPPED = "skipped"             # user chose not to remove
+    DISCOVERED = "discovered"  # found on a broker site
+    SUBMITTED = "submitted"  # opt-out request sent
+    PENDING = "pending"  # waiting on broker response
+    CONFIRMED = "confirmed"  # broker acknowledged removal
+    MONITORING = "monitoring"  # periodic re-checks
+    RE_LISTED = "re_listed"  # data reappeared
+    FAILED = "failed"  # submission or verification failed
+    SKIPPED = "skipped"  # user chose not to remove
 
     # Valid transitions
     @staticmethod
@@ -118,13 +119,13 @@ class RemovalState(str, enum.Enum):
         S = RemovalState
         return {
             S.DISCOVERED: [S.SUBMITTED, S.SKIPPED],
-            S.SUBMITTED:  [S.PENDING, S.FAILED, S.CONFIRMED],
-            S.PENDING:    [S.CONFIRMED, S.FAILED],
-            S.CONFIRMED:  [S.MONITORING],
+            S.SUBMITTED: [S.PENDING, S.FAILED, S.CONFIRMED],
+            S.PENDING: [S.CONFIRMED, S.FAILED],
+            S.CONFIRMED: [S.MONITORING],
             S.MONITORING: [S.RE_LISTED, S.CONFIRMED],
-            S.RE_LISTED:  [S.SUBMITTED, S.SKIPPED],
-            S.FAILED:     [S.SUBMITTED, S.SKIPPED],
-            S.SKIPPED:    [S.SUBMITTED],
+            S.RE_LISTED: [S.SUBMITTED, S.SKIPPED],
+            S.FAILED: [S.SUBMITTED, S.SKIPPED],
+            S.SKIPPED: [S.SUBMITTED],
         }
 
 
@@ -144,10 +145,10 @@ class RemovalRequest(BaseModel):
     profile_id: str
     state: RemovalState = RemovalState.DISCOVERED
     history: list[StateTransition] = Field(default_factory=list)
-    submitted_at: Optional[str] = None
-    confirmed_at: Optional[str] = None
-    last_checked_at: Optional[str] = None
-    next_check_at: Optional[str] = None
+    submitted_at: str | None = None
+    confirmed_at: str | None = None
+    last_checked_at: str | None = None
+    next_check_at: str | None = None
     attempts: int = 0
     notes: str = ""
 
@@ -158,11 +159,13 @@ class RemovalRequest(BaseModel):
                 f"Invalid transition: {self.state.value} → {new_state.value}. "
                 f"Valid: {[s.value for s in valid]}"
             )
-        self.history.append(StateTransition(
-            from_state=self.state.value,
-            to_state=new_state.value,
-            reason=reason,
-        ))
+        self.history.append(
+            StateTransition(
+                from_state=self.state.value,
+                to_state=new_state.value,
+                reason=reason,
+            )
+        )
         self.state = new_state
         now = datetime.now().isoformat()
         if new_state == RemovalState.SUBMITTED:

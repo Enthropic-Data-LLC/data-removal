@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 from platformdirs import user_data_dir
 
@@ -88,10 +86,8 @@ class Database:
         )
         self.conn.commit()
 
-    def get_profile(self, profile_id: str) -> Optional[Profile]:
-        row = self.conn.execute(
-            "SELECT data FROM profiles WHERE id = ?", (profile_id,)
-        ).fetchone()
+    def get_profile(self, profile_id: str) -> Profile | None:
+        row = self.conn.execute("SELECT data FROM profiles WHERE id = ?", (profile_id,)).fetchone()
         return Profile.model_validate_json(row["data"]) if row else None
 
     def list_profiles(self) -> list[Profile]:
@@ -112,15 +108,20 @@ class Database:
             "INSERT OR REPLACE INTO listings "
             "(id, broker_id, profile_id, data, discovered_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (listing.id, listing.broker_id, listing.profile_id,
-             listing.model_dump_json(), listing.discovered_at),
+            (
+                listing.id,
+                listing.broker_id,
+                listing.profile_id,
+                listing.model_dump_json(),
+                listing.discovered_at,
+            ),
         )
         self.conn.commit()
 
     def get_listings(
         self,
-        profile_id: Optional[str] = None,
-        broker_id: Optional[str] = None,
+        profile_id: str | None = None,
+        broker_id: str | None = None,
     ) -> list[Listing]:
         query = "SELECT data FROM listings WHERE 1=1"
         params: list = []
@@ -140,20 +141,28 @@ class Database:
 
     def save_request(self, req: RemovalRequest) -> None:
         from datetime import datetime
+
         self.conn.execute(
             "INSERT OR REPLACE INTO removal_requests "
             "(id, listing_id, broker_id, profile_id, state, data, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (req.id, req.listing_id, req.broker_id, req.profile_id,
-             req.state.value, req.model_dump_json(), datetime.now().isoformat()),
+            (
+                req.id,
+                req.listing_id,
+                req.broker_id,
+                req.profile_id,
+                req.state.value,
+                req.model_dump_json(),
+                datetime.now().isoformat(),
+            ),
         )
         self.conn.commit()
 
     def get_requests(
         self,
-        profile_id: Optional[str] = None,
-        broker_id: Optional[str] = None,
-        state: Optional[RemovalState] = None,
+        profile_id: str | None = None,
+        broker_id: str | None = None,
+        state: RemovalState | None = None,
     ) -> list[RemovalRequest]:
         query = "SELECT data FROM removal_requests WHERE 1=1"
         params: list = []
@@ -170,7 +179,7 @@ class Database:
         rows = self.conn.execute(query, params).fetchall()
         return [RemovalRequest.model_validate_json(r["data"]) for r in rows]
 
-    def get_request(self, request_id: str) -> Optional[RemovalRequest]:
+    def get_request(self, request_id: str) -> RemovalRequest | None:
         row = self.conn.execute(
             "SELECT data FROM removal_requests WHERE id = ?", (request_id,)
         ).fetchone()
@@ -180,7 +189,7 @@ class Database:
     # Stats
     # ------------------------------------------------------------------
 
-    def stats(self, profile_id: Optional[str] = None) -> dict:
+    def stats(self, profile_id: str | None = None) -> dict:
         where = "WHERE profile_id = ?" if profile_id else ""
         params = [profile_id] if profile_id else []
 
