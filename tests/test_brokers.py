@@ -13,6 +13,24 @@ from dataremoval.brokers.spokeo import (
     _deduplicate,
     _normalize_name,
 )
+from dataremoval.brokers.truepeoplesearch import (
+    TruePeopleSearchPlugin,
+)
+from dataremoval.brokers.truepeoplesearch import (
+    _build_search_url as tps_build_search_url,
+)
+from dataremoval.brokers.truepeoplesearch import (
+    _build_search_urls as tps_build_search_urls,
+)
+from dataremoval.brokers.truepeoplesearch import (
+    _compute_confidence as tps_compute_confidence,
+)
+from dataremoval.brokers.truepeoplesearch import (
+    _deduplicate as tps_deduplicate,
+)
+from dataremoval.brokers.truepeoplesearch import (
+    _is_profile_url as tps_is_profile_url,
+)
 from dataremoval.core.models import Address, Listing, Profile
 
 # ---------------------------------------------------------------------------
@@ -262,5 +280,294 @@ async def test_check_status_exception():
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("dataremoval.brokers.spokeo.httpx.AsyncClient", return_value=mock_client):
+        result = await plugin.check_status(listing)
+    assert result == "unknown"
+
+
+# ===========================================================================
+# TruePeopleSearch tests
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# TruePeopleSearch — info
+# ---------------------------------------------------------------------------
+
+
+def test_truepeoplesearch_info_fields():
+    plugin = TruePeopleSearchPlugin()
+    info = plugin.info()
+    assert info.id == "truepeoplesearch"
+    assert info.name == "TruePeopleSearch"
+    assert info.url == "https://www.truepeoplesearch.com"
+    assert info.opt_out_url == "https://www.truepeoplesearch.com/removal"
+    assert info.difficulty.value == "easy"
+    assert info.expected_days == 1
+    assert info.recheck_days == 90
+    assert "Cloudflare" in info.notes
+
+
+# ---------------------------------------------------------------------------
+# TruePeopleSearch — helper functions
+# ---------------------------------------------------------------------------
+
+
+def test_tps_build_search_url_with_location():
+    url = tps_build_search_url("Jane", "Smith", "Springfield", "IL")
+    assert url == (
+        "https://www.truepeoplesearch.com/results"
+        "?name=Jane+Smith&citystatezip=Springfield+IL"
+    )
+
+
+def test_tps_build_search_url_name_only():
+    url = tps_build_search_url("Jane", "Smith")
+    assert url == "https://www.truepeoplesearch.com/results?name=Jane+Smith"
+
+
+def test_tps_build_search_url_state_only():
+    url = tps_build_search_url("Jane", "Smith", "", "IL")
+    assert url == "https://www.truepeoplesearch.com/results?name=Jane+Smith&citystatezip=IL"
+
+
+def test_tps_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL", city="Springfield")],
+    )
+    urls = tps_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "name=Jane+Smith" in urls[0]
+    assert "citystatezip=Springfield+IL" in urls[0]
+
+
+def test_tps_build_search_urls_with_aliases():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        aliases=["Jenny Smith"],
+        addresses=[Address(state="IL", city="Springfield")],
+    )
+    urls = tps_build_search_urls(profile)
+    assert len(urls) == 2
+    assert any("Jane+Smith" in u for u in urls)
+    assert any("Jenny+Smith" in u for u in urls)
+
+
+def test_tps_build_search_urls_no_address():
+    profile = Profile(first_name="Jane", last_name="Smith")
+    urls = tps_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "citystatezip" not in urls[0]
+
+
+def test_tps_is_profile_url_valid():
+    assert tps_is_profile_url("https://www.truepeoplesearch.com/find/person/1a2b3c4d5e") is True
+    assert tps_is_profile_url("/find/person/abc123def456") is True
+
+
+def test_tps_is_profile_url_invalid():
+    assert tps_is_profile_url("https://www.truepeoplesearch.com/results") is False
+    assert tps_is_profile_url("https://www.truepeoplesearch.com/removal") is False
+    assert tps_is_profile_url("https://www.google.com") is False
+
+
+def test_tps_deduplicate():
+    base = dict(broker_id="truepeoplesearch", profile_id="abc")
+    listings = [
+        Listing(url="https://www.truepeoplesearch.com/find/person/aaa", **base),
+        Listing(url="https://www.truepeoplesearch.com/find/person/bbb", **base),
+        Listing(url="https://www.truepeoplesearch.com/find/person/aaa", **base),
+    ]
+    result = tps_deduplicate(listings)
+    assert len(result) == 2
+    assert [item.url for item in result] == [
+        "https://www.truepeoplesearch.com/find/person/aaa",
+        "https://www.truepeoplesearch.com/find/person/bbb",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# TruePeopleSearch — confidence scoring
+# ---------------------------------------------------------------------------
+
+
+def test_tps_confidence_exact_match():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        age=35,
+        addresses=[Address(state="IL", city="Springfield")],
+    )
+    score = tps_compute_confidence(profile, "Jane Smith", "Springfield, IL", "Age 35")
+    assert score >= 0.7
+
+
+def test_tps_confidence_name_only():
+    profile = Profile(first_name="Jane", last_name="Smith")
+    score = tps_compute_confidence(profile, "Jane Smith", "Los Angeles, CA", "")
+    assert 0.3 <= score <= 0.5
+
+
+def test_tps_confidence_partial_name():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL")],
+    )
+    score = tps_compute_confidence(profile, "Jane M Smith", "Chicago, IL", "")
+    # Partial name (0.3) + state (0.2) = 0.5
+    assert 0.4 <= score <= 0.6
+
+
+def test_tps_confidence_age_text_format():
+    """TruePeopleSearch shows age as 'Age 35', not just '35'."""
+    profile = Profile(first_name="Jane", last_name="Smith", age=35)
+    score = tps_compute_confidence(profile, "Jane Smith", "", "Age 35")
+    # Name (0.4) + age (0.15) = 0.55
+    assert score >= 0.5
+
+
+def test_tps_confidence_with_relatives():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        relatives=["Alice Smith", "Bob Smith"],
+    )
+    score = tps_compute_confidence(
+        profile, "Jane Smith", "", "", found_relatives=["Alice Smith"]
+    )
+    # Name (0.4) + 1 relative (0.05) = 0.45
+    assert score >= 0.4
+
+
+# ---------------------------------------------------------------------------
+# TruePeopleSearch — search (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tps_search_returns_empty_without_playwright():
+    plugin = TruePeopleSearchPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.truepeoplesearch.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# TruePeopleSearch — opt-out (mocked)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tps_opt_out_returns_false_without_playwright():
+    plugin = TruePeopleSearchPlugin()
+    listing = Listing(
+        broker_id="truepeoplesearch",
+        profile_id="abc",
+        url="https://www.truepeoplesearch.com/find/person/aaa",
+    )
+    with patch("dataremoval.brokers.truepeoplesearch.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# TruePeopleSearch — check_status (mocked httpx)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tps_check_status_removed():
+    plugin = TruePeopleSearchPlugin()
+    listing = Listing(
+        broker_id="truepeoplesearch",
+        profile_id="abc",
+        url="https://www.truepeoplesearch.com/find/person/aaa",
+    )
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 404
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await plugin.check_status(listing)
+    assert result == "removed"
+
+
+@pytest.mark.asyncio
+async def test_tps_check_status_still_listed():
+    plugin = TruePeopleSearchPlugin()
+    listing = Listing(
+        broker_id="truepeoplesearch",
+        profile_id="abc",
+        url="https://www.truepeoplesearch.com/find/person/aaa",
+    )
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 200
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await plugin.check_status(listing)
+    assert result == "still_listed"
+
+
+@pytest.mark.asyncio
+async def test_tps_check_status_cloudflare_403():
+    """Cloudflare 403 should return 'unknown', not 'still_listed'."""
+    plugin = TruePeopleSearchPlugin()
+    listing = Listing(
+        broker_id="truepeoplesearch",
+        profile_id="abc",
+        url="https://www.truepeoplesearch.com/find/person/aaa",
+    )
+    mock_resp = AsyncMock()
+    mock_resp.status_code = 403
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await plugin.check_status(listing)
+    assert result == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_tps_check_status_exception():
+    plugin = TruePeopleSearchPlugin()
+    listing = Listing(
+        broker_id="truepeoplesearch",
+        profile_id="abc",
+        url="https://www.truepeoplesearch.com/find/person/aaa",
+    )
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
         result = await plugin.check_status(listing)
     assert result == "unknown"
