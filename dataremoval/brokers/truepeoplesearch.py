@@ -4,10 +4,10 @@ Opt-out: Online form at https://www.truepeoplesearch.com/removal
 Difficulty: Easy
 Expected time: 24h
 
-TruePeopleSearch uses Cloudflare WAF and an internal captcha system.
-This plugin uses playwright-stealth to bypass bot detection headlessly.
-If stealth fails and a captcha appears, falls back to a visible browser
-so the user can solve it manually.
+TruePeopleSearch uses DataDome bot protection (beyond Cloudflare WAF)
+which blocks headless browsers even with stealth techniques.  This
+plugin tries stealth headless first but will fall back to a visible
+browser for manual captcha solving when DataDome blocks access.
 """
 
 from __future__ import annotations
@@ -79,10 +79,11 @@ _RESULT_AGE_SEL = "span.age, .card-summary span:has-text('Age')"
 # Profile detail URLs: /find/person/<hex-id>
 _PROFILE_URL_RE = re.compile(r"/find/person/[a-z0-9]+", re.IGNORECASE)
 
-# Captcha detection
+# Captcha detection (includes DataDome captcha iframe)
 _CAPTCHA_URL_FRAGMENT = "/InternalCaptcha"
 _CAPTCHA_INDICATOR_SEL = (
-    "form[action*='InternalCaptcha'], iframe[src*='challenge'], div.cf-turnstile"
+    "form[action*='InternalCaptcha'], iframe[src*='challenge'], "
+    "div.cf-turnstile, iframe[src*='captcha-delivery.com'], iframe[src*='geo.captcha']"
 )
 
 
@@ -304,8 +305,8 @@ class TruePeopleSearchPlugin(BrokerPlugin):
             expected_days=1,
             recheck_days=90,
             notes=(
-                "Uses Cloudflare WAF. Runs headless with playwright-stealth "
-                "to bypass bot detection."
+                "Uses DataDome bot protection. Tries headless stealth first; "
+                "requires visible browser with manual captcha solving."
             ),
         )
 

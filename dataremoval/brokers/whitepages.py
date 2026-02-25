@@ -69,15 +69,19 @@ _STEALTH_ARGS = [
     "--disable-blink-features=AutomationControlled",
 ]
 
-# CSS selectors for search result cards (may need tuning against live DOM)
-_RESULT_CARD_SEL = "div.serp-card, div[data-testid='person-card']"
-_RESULT_LINK_SEL = "a[href*='/name/']"
-_RESULT_NAME_SEL = "a.h4, .serp-card h4, .serp-card .h4"
-_RESULT_LOCATION_SEL = "span.location, .serp-card .address"
-_RESULT_AGE_SEL = "span.age, .serp-card .age"
+# CSS selectors for search result cards (verified against live DOM 2025-02)
+_RESULT_CARD_SEL = "li.serp-card"
+_RESULT_LINK_SEL = 'a[data-qa-selector="organic-card-person-name"]'
+_RESULT_NAME_SEL = 'a[data-qa-selector="organic-card-person-name"]'
+_RESULT_LOCATION_SEL = 'dd[data-qa-selector="serp-city-label"]'
+_RESULT_AGE_SEL = ".person-age"
 
-# Profile URLs: /name/First-Last/City-State
-_PROFILE_URL_RE = re.compile(r"/name/[A-Za-z]+-[A-Za-z]+/[A-Za-z]+-[A-Za-z]+")
+# TOS acceptance
+_TOS_CHECKBOX_SEL = "#tos-checkbox"
+_TOS_CONTINUE_SEL = 'button:has-text("Continue")'
+
+# Profile URLs: /name/First-Last/City-State/P<id>
+_PROFILE_URL_RE = re.compile(r"/name/[A-Za-z-]+/[A-Za-z-]+/P[a-zA-Z0-9]+")
 
 # Captcha detection
 _CAPTCHA_INDICATOR_SEL = (
@@ -248,6 +252,25 @@ async def _wait_for_captcha(page: Page, description: str = "page") -> bool:
     return False
 
 
+async def _accept_tos(page: Page) -> bool:
+    """Accept Whitepages TOS modal if present. Returns True on success."""
+    try:
+        checkbox = await page.query_selector(_TOS_CHECKBOX_SEL)
+        if not checkbox:
+            return True  # no TOS modal
+        await checkbox.click()
+        await asyncio.sleep(0.5)
+        btn = await page.query_selector(_TOS_CONTINUE_SEL)
+        if btn:
+            await btn.click()
+            await page.wait_for_load_state("domcontentloaded")
+            log.debug("Accepted TOS modal")
+        return True
+    except Exception:
+        log.debug("TOS acceptance failed or not needed")
+        return True
+
+
 # ---------------------------------------------------------------------------
 # Card extraction
 # ---------------------------------------------------------------------------
@@ -335,6 +358,7 @@ class WhitepagesPlugin(BrokerPlugin):
             browser = await _launch_browser(pw, headless=True)
             try:
                 page: Page = await browser.new_page(user_agent=USER_AGENT)
+                tos_accepted = False
 
                 for i, url in enumerate(urls):
                     if i > 0:
@@ -354,6 +378,13 @@ class WhitepagesPlugin(BrokerPlugin):
                     if not await _wait_for_captcha(page, description=url):
                         log.warning("Skipping %s due to unsolved captcha", url)
                         continue
+
+                    # Accept TOS modal (once per session)
+                    if not tos_accepted:
+                        tos_accepted = await _accept_tos(page)
+
+                    # Wait a moment for content to settle after TOS
+                    await asyncio.sleep(2)
 
                     # Wait for result cards
                     try:
