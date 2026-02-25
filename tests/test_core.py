@@ -86,6 +86,16 @@ def test_failure_retry():
     assert req.attempts == 2
 
 
+def test_discovered_to_failed():
+    """Opt-out attempt can fail directly from discovered state."""
+    req = RemovalRequest(listing_id="l1", broker_id="test", profile_id="p1")
+    req.transition(RemovalState.FAILED, "submission returned false")
+    assert req.state == RemovalState.FAILED
+    # Can retry from failed
+    req.transition(RemovalState.SUBMITTED, "retry")
+    assert req.attempts == 1
+
+
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------

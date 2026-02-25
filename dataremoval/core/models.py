@@ -118,7 +118,7 @@ class RemovalState(enum.StrEnum):
     def transitions() -> dict[RemovalState, list[RemovalState]]:
         S = RemovalState
         return {
-            S.DISCOVERED: [S.SUBMITTED, S.SKIPPED],
+            S.DISCOVERED: [S.SUBMITTED, S.SKIPPED, S.FAILED],
             S.SUBMITTED: [S.PENDING, S.FAILED, S.CONFIRMED],
             S.PENDING: [S.CONFIRMED, S.FAILED],
             S.CONFIRMED: [S.MONITORING],
