@@ -16,8 +16,6 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-import httpx
-
 from dataremoval.brokers import (
     BrokerInfo,
     BrokerPlugin,
@@ -25,26 +23,26 @@ from dataremoval.brokers import (
     OptOutMethod,
     register_broker,
 )
+from dataremoval.brokers._utils import (
+    DEFAULT_USER_AGENT,
+    HAS_PLAYWRIGHT,
+    check_url_status,
+    compute_confidence,
+    deduplicate,
+)
 from dataremoval.core.models import Listing, Profile
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, Page
 
-try:
+if HAS_PLAYWRIGHT:
     from playwright.async_api import async_playwright
-
-    HAS_PLAYWRIGHT = True
-except ImportError:
-    HAS_PLAYWRIGHT = False
 
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://www.spokeo.com"
 OPT_OUT_URL = f"{BASE_URL}/optout"
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+USER_AGENT = DEFAULT_USER_AGENT
 PAGE_TIMEOUT_MS = 20_000
 SEARCH_DELAY_SECONDS = 2
 
@@ -82,68 +80,6 @@ def _build_search_urls(profile: Profile) -> list[str]:
         else:
             urls.append(f"{BASE_URL}/{slug}")
     return urls
-
-
-def _compute_confidence(
-    profile: Profile,
-    found_name: str,
-    found_location: str,
-    found_age: str,
-    found_relatives: list[str] | None = None,
-) -> float:
-    """Compute a 0-1 confidence score for a listing match."""
-    score = 0.0
-
-    # Name match (+0.4)
-    profile_name = profile.full_name.lower()
-    if found_name.lower() == profile_name:
-        score += 0.4
-    elif (
-        profile.first_name.lower() in found_name.lower()
-        and profile.last_name.lower() in found_name.lower()
-    ):
-        score += 0.3
-
-    # State match (+0.2)
-    found_loc_lower = found_location.lower()
-    for addr in profile.addresses:
-        if addr.state and addr.state.lower() in found_loc_lower:
-            score += 0.2
-            break
-
-    # City match (+0.15)
-    for addr in profile.addresses:
-        if addr.city and addr.city.lower() in found_loc_lower:
-            score += 0.15
-            break
-
-    # Age match (+0.15)
-    if profile.age and found_age:
-        try:
-            if abs(profile.age - int(found_age)) <= 1:
-                score += 0.15
-        except ValueError:
-            pass
-
-    # Relatives match (up to +0.1)
-    if found_relatives and profile.relatives:
-        profile_rels = {r.lower() for r in profile.relatives}
-        matches = sum(1 for r in found_relatives if r.lower() in profile_rels)
-        if matches:
-            score += min(0.1, matches * 0.05)
-
-    return min(score, 1.0)
-
-
-def _deduplicate(listings: list[Listing]) -> list[Listing]:
-    """Remove duplicate listings by URL."""
-    seen: set[str] = set()
-    unique: list[Listing] = []
-    for listing in listings:
-        if listing.url not in seen:
-            seen.add(listing.url)
-            unique.append(listing)
-    return unique
 
 
 class SpokeoPlugin(BrokerPlugin):
@@ -208,7 +144,7 @@ class SpokeoPlugin(BrokerPlugin):
                                 found_age = line
                                 break
 
-                        confidence = _compute_confidence(
+                        confidence = compute_confidence(
                             profile, found_name, found_location, found_age
                         )
                         listings.append(
@@ -226,7 +162,7 @@ class SpokeoPlugin(BrokerPlugin):
             finally:
                 await browser.close()
 
-        return _deduplicate(listings)
+        return deduplicate(listings)
 
     async def submit_opt_out(self, listing: Listing) -> bool:
         """Submit an opt-out request for *listing* via Spokeo's opt-out page."""
@@ -277,17 +213,7 @@ class SpokeoPlugin(BrokerPlugin):
 
     async def check_status(self, listing: Listing) -> str:
         """Check whether a listing URL still resolves (httpx, no browser needed)."""
-        try:
-            async with httpx.AsyncClient(
-                follow_redirects=True,
-                headers={"User-Agent": USER_AGENT},
-            ) as client:
-                resp = await client.get(listing.url, timeout=10)
-                if resp.status_code in (404, 410):
-                    return "removed"
-                return "still_listed"
-        except Exception:
-            return "unknown"
+        return await check_url_status(listing.url, treat_403_as_unknown=False)
 
 
 register_broker(SpokeoPlugin())

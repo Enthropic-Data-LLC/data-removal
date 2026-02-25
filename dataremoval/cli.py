@@ -16,6 +16,8 @@ Usage:
     dr brokers info <id>   Show details for a broker
 
     dr export [--profile ID]  Export all data as JSON
+
+    dr letter --broker ID     Generate PDF opt-out letter for mailing
 """
 
 from __future__ import annotations
@@ -469,6 +471,79 @@ def export(
     else:
         Path(output).write_text(payload)
         console.print(f"[green]Exported to {output}[/green]")
+
+
+# ---------------------------------------------------------------------------
+# Letter (PDF opt-out)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def letter(
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    broker_id: str = typer.Option(..., "--broker", "-b", help="Broker ID"),
+    listing_id: str = typer.Option(
+        "", "--listing", "-l", help="Listing ID (uses first if omitted)"
+    ),
+    output: str = typer.Option("", "--output", "-o", help="Output PDF path"),
+):
+    """Generate a PDF opt-out letter for mail-in removal."""
+    from dataremoval.pdf import generate_opt_out_letter
+
+    db = _db()
+    profile = _default_profile(db, profile_id)
+
+    plugin = registry.get(broker_id)
+    if not plugin:
+        console.print(f"[red]Broker '{broker_id}' not found.[/red]")
+        raise typer.Exit(1)
+
+    info = plugin.info()
+    if not info.mail_address:
+        console.print(f"[red]Broker '{broker_id}' does not support mail-in opt-out.[/red]")
+        raise typer.Exit(1)
+
+    # Find the listing
+    listings = db.get_listings(profile_id=profile.id, broker_id=broker_id)
+    if not listings:
+        console.print(
+            f"[red]No listings found for broker '{broker_id}'.[/red]\n"
+            f"Run [bold]dr scan --broker {broker_id}[/bold] first."
+        )
+        raise typer.Exit(1)
+
+    if listing_id:
+        matches = [li for li in listings if li.id == listing_id]
+        if not matches:
+            console.print(f"[red]Listing '{listing_id}' not found.[/red]")
+            raise typer.Exit(1)
+        listing = matches[0]
+    else:
+        listing = listings[0]
+
+    db.close()
+
+    if not output:
+        output = f"opt-out-{info.id}-{listing.id[:8]}.pdf"
+
+    out_path = generate_opt_out_letter(
+        profile=profile,
+        listing=listing,
+        broker_name=info.name,
+        broker_address=info.mail_address,
+        output_path=output,
+    )
+
+    console.print(
+        Panel(
+            f"[bold green]Letter generated[/bold green]\n\n"
+            f"  File:    {out_path}\n"
+            f"  Broker:  {info.name}\n"
+            f"  Mail to: {info.mail_address}\n\n"
+            f"Print and mail this letter to the address above.",
+            title="PDF Opt-Out Letter",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,19 +1,19 @@
-"""Whitepages broker plugin.
+"""FastPeopleSearch broker plugin.
 
-Opt-out: Online form + phone call verification
+Opt-out: Online form at https://www.fastpeoplesearch.com/removal
 Difficulty: Easy
-Expected time: 48h
+Expected time: 72h
 
-Whitepages uses JavaScript-rendered pages and may have Cloudflare
-protection.  This plugin uses playwright-stealth to bypass bot
-detection headlessly.  The opt-out flow requires phone call
-verification — the plugin automates form filling up to that step,
-then opens a visible browser for the user to complete the call.
+FastPeopleSearch uses Cloudflare WAF plus reCAPTCHA on the opt-out
+form.  This plugin tries stealth headless first and falls back to a
+visible browser when captcha is detected.  Email verification is
+required after submitting the removal form.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -47,28 +47,23 @@ log = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-BASE_URL = "https://www.whitepages.com"
-SUPPRESSION_URL = f"{BASE_URL}/suppression-requests"
+BASE_URL = "https://www.fastpeoplesearch.com"
+REMOVAL_URL = f"{BASE_URL}/removal"
 USER_AGENT = DEFAULT_USER_AGENT
 PAGE_TIMEOUT_MS = 30_000
-PHONE_VERIFY_TIMEOUT = 300.0  # 5 minutes for phone verification
 SEARCH_DELAY_SECONDS = 3
 
-# CSS selectors for search result cards (verified against live DOM 2025-02)
-_RESULT_CARD_SEL = "li.serp-card"
-_RESULT_LINK_SEL = 'a[data-qa-selector="organic-card-person-name"]'
-_RESULT_NAME_SEL = 'a[data-qa-selector="organic-card-person-name"]'
-_RESULT_LOCATION_SEL = 'dd[data-qa-selector="serp-city-label"]'
-_RESULT_AGE_SEL = ".person-age"
+# CSS selectors for result cards (may need tuning against live DOM)
+_RESULT_CARD_SEL = "div.card"
+_RESULT_LINK_SEL = "a[href*='/name/']"
+_RESULT_NAME_SEL = ".card-title, h4"
+_RESULT_LOCATION_SEL = ".card-location, .card-address"
+_RESULT_AGE_SEL = ".card-age"
 
-# TOS acceptance
-_TOS_CHECKBOX_SEL = "#tos-checkbox"
-_TOS_CONTINUE_SEL = 'button:has-text("Continue")'
+# Profile detail URLs: /name/<First>-<Last>_<City>-<State>
+_PROFILE_URL_RE = re.compile(r"/name/[A-Za-z]+-[A-Za-z]+", re.IGNORECASE)
 
-# Profile URLs: /name/First-Last/City-State/P<id>
-_PROFILE_URL_RE = re.compile(r"/name/[A-Za-z-]+/[A-Za-z-]+/P[a-zA-Z0-9]+")
-
-# Captcha detection
+# Captcha detection (Cloudflare + reCAPTCHA)
 _CAPTCHA_INDICATOR_SEL = (
     "iframe[src*='challenge'], div.cf-turnstile, iframe[src*='recaptcha'], div.g-recaptcha"
 )
@@ -80,26 +75,27 @@ _CAPTCHA_INDICATOR_SEL = (
 
 
 def _normalize_name(name: str) -> str:
-    """Normalize a name for Whitepages URL format: ``'Jane Doe' -> 'Jane-Doe'``."""
+    """Normalize a name for URL format: ``'Jane Doe' -> 'Jane-Doe'``."""
     return "-".join(name.split())
 
 
 def _build_search_url(first: str, last: str, city: str = "", state: str = "") -> str:
-    """Build a Whitepages search URL.
+    """Build a FastPeopleSearch search URL.
+
+    Uses underscore between name and location segments.
 
     >>> _build_search_url("Jane", "Smith", "Springfield", "IL")
-    'https://www.whitepages.com/name/Jane-Smith/Springfield-IL'
+    'https://www.fastpeoplesearch.com/name/Jane-Smith_Springfield-IL'
     """
     name_slug = _normalize_name(f"{first} {last}")
-    url = f"{BASE_URL}/name/{name_slug}"
     location = f"{city} {state}".strip()
     if location:
-        url += f"/{_normalize_name(location)}"
-    return url
+        return f"{BASE_URL}/name/{name_slug}_{_normalize_name(location)}"
+    return f"{BASE_URL}/name/{name_slug}"
 
 
 def _build_search_urls(profile: Profile) -> list[str]:
-    """Generate Whitepages search URLs from all profile search variants."""
+    """Generate FastPeopleSearch URLs from all profile search variants."""
     urls: list[str] = []
     for variant in profile.search_variants():
         first = variant.get("first_name", "")
@@ -113,7 +109,7 @@ def _build_search_urls(profile: Profile) -> list[str]:
 
 
 def _is_profile_url(url: str) -> bool:
-    """Return True if *url* looks like a Whitepages person profile page."""
+    """Return True if *url* looks like a FastPeopleSearch person detail page."""
     path = urlparse(url).path
     return bool(_PROFILE_URL_RE.search(path))
 
@@ -121,25 +117,6 @@ def _is_profile_url(url: str) -> bool:
 # ---------------------------------------------------------------------------
 # Browser helpers
 # ---------------------------------------------------------------------------
-
-
-async def _accept_tos(page: Page) -> bool:
-    """Accept Whitepages TOS modal if present. Returns True on success."""
-    try:
-        checkbox = await page.query_selector(_TOS_CHECKBOX_SEL)
-        if not checkbox:
-            return True  # no TOS modal
-        await checkbox.click()
-        await asyncio.sleep(0.5)
-        btn = await page.query_selector(_TOS_CONTINUE_SEL)
-        if btn:
-            await btn.click()
-            await page.wait_for_load_state("domcontentloaded")
-            log.debug("Accepted TOS modal")
-        return True
-    except Exception:
-        log.debug("TOS acceptance failed or not needed")
-        return True
 
 
 async def _handle_captcha(page: Page, description: str = "page") -> bool:
@@ -152,7 +129,7 @@ async def _handle_captcha(page: Page, description: str = "page") -> bool:
 
 
 async def _extract_card(card, profile: Profile) -> Listing | None:
-    """Extract listing data from a single search result card."""
+    """Extract listing data from a single result card element."""
     # Detail link
     link_el = await card.query_selector(_RESULT_LINK_SEL)
     href = ""
@@ -178,7 +155,7 @@ async def _extract_card(card, profile: Profile) -> Listing | None:
     confidence = compute_confidence(profile, found_name, found_location, found_age)
 
     return Listing(
-        broker_id="whitepages",
+        broker_id="fastpeoplesearch",
         profile_id=profile.id,
         url=href,
         found_name=found_name,
@@ -193,34 +170,32 @@ async def _extract_card(card, profile: Profile) -> Listing | None:
 # ---------------------------------------------------------------------------
 
 
-class WhitepagesPlugin(BrokerPlugin):
+class FastPeopleSearchPlugin(BrokerPlugin):
     def info(self) -> BrokerInfo:
         return BrokerInfo(
-            id="whitepages",
-            name="Whitepages",
+            id="fastpeoplesearch",
+            name="FastPeopleSearch",
             url=BASE_URL,
             category="people_search",
             opt_out_method=OptOutMethod.ONLINE_FORM,
-            opt_out_url=SUPPRESSION_URL,
+            opt_out_url=REMOVAL_URL,
             difficulty=Difficulty.EASY,
-            expected_days=2,
+            expected_days=3,
             recheck_days=90,
             notes=(
-                "Requires phone call verification for opt-out. "
-                "Runs headless with playwright-stealth for search. "
-                "Opens visible browser for opt-out (phone verification). "
-                "Re-lists quarterly from public records."
+                "Uses Cloudflare + reCAPTCHA. Stealth headless with visible "
+                "fallback. Email verification required."
             ),
         )
 
     async def search(self, profile: Profile) -> list[Listing]:
-        """Search Whitepages for listings matching *profile*.
+        """Search FastPeopleSearch for listings matching *profile*.
 
-        Uses playwright-stealth for headless operation.  If a captcha
-        still appears, waits for it to be resolved.
+        Tries stealth headless first.  If Cloudflare captcha is detected,
+        relaunches a visible browser for manual captcha solving.
         """
         if not HAS_PLAYWRIGHT:
-            log.warning("Playwright not installed — skipping Whitepages search")
+            log.warning("Playwright not installed — skipping FastPeopleSearch search")
             return []
 
         urls = _build_search_urls(profile)
@@ -230,10 +205,24 @@ class WhitepagesPlugin(BrokerPlugin):
         listings: list[Listing] = []
 
         async with stealth_playwright() as pw:
+            # Probe headless first
+            headless = True
             browser = await launch_browser(pw, headless=True)
             try:
                 page: Page = await browser.new_page(user_agent=USER_AGENT)
-                tos_accepted = False
+                with contextlib.suppress(Exception):
+                    await page.goto(urls[0], timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+                captcha_el = await page.query_selector(_CAPTCHA_INDICATOR_SEL)
+                if captcha_el:
+                    headless = False
+                    log.info("Cloudflare captcha detected — switching to visible browser")
+            finally:
+                await browser.close()
+
+            # Launch the real browser (visible if captcha was detected)
+            browser = await launch_browser(pw, headless=headless)
+            try:
+                page = await browser.new_page(user_agent=USER_AGENT)
 
                 for i, url in enumerate(urls):
                     if i > 0:
@@ -249,17 +238,10 @@ class WhitepagesPlugin(BrokerPlugin):
                         log.debug("Navigation timeout for %s", url)
                         continue
 
-                    # Handle captcha
+                    # Handle captcha — user solves in visible window
                     if not await _handle_captcha(page, description=url):
                         log.warning("Skipping %s due to unsolved captcha", url)
                         continue
-
-                    # Accept TOS modal (once per session)
-                    if not tos_accepted:
-                        tos_accepted = await _accept_tos(page)
-
-                    # Wait a moment for content to settle after TOS
-                    await asyncio.sleep(2)
 
                     # Wait for result cards
                     try:
@@ -283,10 +265,10 @@ class WhitepagesPlugin(BrokerPlugin):
         return deduplicate(listings)
 
     async def submit_opt_out(self, listing: Listing) -> bool:
-        """Submit a removal request via Whitepages suppression form.
+        """Submit a removal request via FastPeopleSearch's removal page.
 
-        Automates form filling up to the phone verification step, then
-        prompts the user to answer the automated call and enter the code.
+        Tries stealth headless; falls back to visible browser if captcha
+        is detected.
         """
         if not HAS_PLAYWRIGHT:
             log.warning("Playwright not installed — cannot submit opt-out")
@@ -294,77 +276,68 @@ class WhitepagesPlugin(BrokerPlugin):
 
         try:
             async with stealth_playwright() as pw:
-                # Visible browser needed for phone verification interaction
-                browser = await launch_browser(pw, headless=False)
+                # Probe headless first
+                headless = True
+                browser = await launch_browser(pw, headless=True)
+                try:
+                    probe = await browser.new_page(user_agent=USER_AGENT)
+                    with contextlib.suppress(Exception):
+                        await probe.goto(
+                            REMOVAL_URL,
+                            timeout=PAGE_TIMEOUT_MS,
+                            wait_until="domcontentloaded",
+                        )
+                    captcha_el = await probe.query_selector(_CAPTCHA_INDICATOR_SEL)
+                    if captcha_el:
+                        headless = False
+                        log.info("Cloudflare captcha detected — switching to visible browser")
+                finally:
+                    await browser.close()
+
+                browser = await launch_browser(pw, headless=headless)
                 try:
                     page = await browser.new_page(user_agent=USER_AGENT)
 
-                    # Step 1: Navigate to suppression page
+                    # Navigate to the removal page
                     await page.goto(
-                        SUPPRESSION_URL,
+                        REMOVAL_URL,
                         timeout=PAGE_TIMEOUT_MS,
                         wait_until="domcontentloaded",
                     )
 
-                    if not await _handle_captcha(page, description="suppression page"):
-                        log.error("Could not pass captcha on suppression page")
+                    if not await _handle_captcha(page, description="removal page"):
+                        log.error("Could not pass captcha on removal page")
                         return False
 
-                    # Step 2: Paste listing URL and click Next
+                    # Look for a URL/name input and fill it
                     url_input = page.locator(
                         'input[name="url"], '
-                        'input[placeholder*="whitepages.com"], '
+                        'input[placeholder*="fastpeoplesearch.com"], '
                         'input[type="url"], '
-                        "input.suppression-input"
+                        'input[type="text"]'
                     ).first
                     await url_input.fill(listing.url)
 
-                    next_btn = page.locator(
-                        'button:has-text("Next"), button:has-text("next"), input[type="submit"]'
-                    ).first
-                    await next_btn.click(timeout=PAGE_TIMEOUT_MS)
-                    await page.wait_for_load_state("domcontentloaded")
-
-                    if not await _handle_captcha(page, description="profile confirm"):
-                        return False
-
-                    # Step 3: Click "Remove Me"
+                    # Click the remove / submit button
                     remove_btn = page.locator(
-                        'button:has-text("Remove Me"), '
-                        'button:has-text("Remove me"), '
-                        'a:has-text("Remove Me")'
+                        'button:has-text("Remove"), '
+                        'button[type="submit"], '
+                        'a:has-text("Remove My Record"), '
+                        'input[type="submit"]'
                     ).first
                     await remove_btn.click(timeout=PAGE_TIMEOUT_MS)
-                    await page.wait_for_load_state("domcontentloaded")
 
-                    # Step 4: Select reason (if dropdown appears)
-                    try:
-                        reason_select = page.locator("select, [role='listbox']").first
-                        await reason_select.select_option(index=1, timeout=5000)
-                    except Exception:
-                        log.debug("No reason dropdown found, continuing")
-
-                    # Step 5: Phone verification — user must interact
-                    log.warning(
-                        "Phone verification required. Please complete the phone "
-                        "call verification in the browser window. "
-                        "Waiting up to %d seconds...",
-                        int(PHONE_VERIFY_TIMEOUT),
-                    )
-
-                    # Wait for confirmation that verification is complete
-                    try:
-                        await page.wait_for_selector(
-                            "text=/opt.?out.*complete|request.*received|"
-                            "successfully.*removed|removal.*confirmed/i",
-                            timeout=PHONE_VERIFY_TIMEOUT * 1000,
-                        )
-                    except Exception:
-                        log.error(
-                            "Phone verification not completed within timeout for %s",
-                            listing.url,
-                        )
+                    # Handle any confirmation captcha
+                    if not await _handle_captcha(page, description="removal confirmation"):
+                        log.error("Could not pass captcha on removal confirmation")
                         return False
+
+                    # Wait for confirmation
+                    await page.wait_for_selector(
+                        "text=/removed|success|request.*received|check your email|"
+                        "email.*verification|record.*removed/i",
+                        timeout=PAGE_TIMEOUT_MS,
+                    )
 
                     log.info("Successfully submitted removal for %s", listing.url)
                     return True
@@ -380,4 +353,4 @@ class WhitepagesPlugin(BrokerPlugin):
         return await check_url_status(listing.url)
 
 
-register_broker(WhitepagesPlugin())
+register_broker(FastPeopleSearchPlugin())

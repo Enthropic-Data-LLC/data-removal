@@ -1,18 +1,40 @@
 """Tests for broker plugin system."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-import httpx
 import pytest
 
 from dataremoval.brokers import registry
+from dataremoval.brokers.beenverified import BeenVerifiedPlugin
+from dataremoval.brokers.beenverified import _build_search_url as bv_build_search_url
+from dataremoval.brokers.beenverified import _build_search_urls as bv_build_search_urls
+from dataremoval.brokers.beenverified import _is_profile_url as bv_is_profile_url
+from dataremoval.brokers.fastpeoplesearch import FastPeopleSearchPlugin
+from dataremoval.brokers.fastpeoplesearch import _build_search_url as fps_build_search_url
+from dataremoval.brokers.fastpeoplesearch import _build_search_urls as fps_build_search_urls
+from dataremoval.brokers.fastpeoplesearch import _is_profile_url as fps_is_profile_url
+from dataremoval.brokers.intelius import InteliusPlugin
+from dataremoval.brokers.intelius import _build_search_url as int_build_search_url
+from dataremoval.brokers.intelius import _build_search_urls as int_build_search_urls
+from dataremoval.brokers.intelius import _is_profile_url as int_is_profile_url
+from dataremoval.brokers.peoplefinder import PeopleFinderPlugin
+from dataremoval.brokers.peoplefinder import _build_search_url as pf_build_search_url
+from dataremoval.brokers.peoplefinder import _build_search_urls as pf_build_search_urls
+from dataremoval.brokers.peoplefinder import _is_profile_url as pf_is_profile_url
+from dataremoval.brokers.radaris import RadarisPlugin
+from dataremoval.brokers.radaris import _build_search_url as rad_build_search_url
+from dataremoval.brokers.radaris import _build_search_urls as rad_build_search_urls
+from dataremoval.brokers.radaris import _is_profile_url as rad_is_profile_url
 from dataremoval.brokers.spokeo import (
     SpokeoPlugin,
     _build_search_urls,
-    _compute_confidence,
-    _deduplicate,
+    _is_profile_url,
     _normalize_name,
 )
+from dataremoval.brokers.thatsthem import ThatsThemPlugin
+from dataremoval.brokers.thatsthem import _build_search_url as tt_build_search_url
+from dataremoval.brokers.thatsthem import _build_search_urls as tt_build_search_urls
+from dataremoval.brokers.thatsthem import _is_profile_url as tt_is_profile_url
 from dataremoval.brokers.truepeoplesearch import (
     TruePeopleSearchPlugin,
 )
@@ -23,14 +45,12 @@ from dataremoval.brokers.truepeoplesearch import (
     _build_search_urls as tps_build_search_urls,
 )
 from dataremoval.brokers.truepeoplesearch import (
-    _compute_confidence as tps_compute_confidence,
-)
-from dataremoval.brokers.truepeoplesearch import (
-    _deduplicate as tps_deduplicate,
-)
-from dataremoval.brokers.truepeoplesearch import (
     _is_profile_url as tps_is_profile_url,
 )
+from dataremoval.brokers.usphonebook import USPhonebookPlugin
+from dataremoval.brokers.usphonebook import _build_search_url as usph_build_search_url
+from dataremoval.brokers.usphonebook import _build_search_urls as usph_build_search_urls
+from dataremoval.brokers.usphonebook import _is_profile_url as usph_is_profile_url
 from dataremoval.brokers.whitepages import (
     WhitepagesPlugin,
 )
@@ -41,12 +61,6 @@ from dataremoval.brokers.whitepages import (
     _build_search_urls as wp_build_search_urls,
 )
 from dataremoval.brokers.whitepages import (
-    _compute_confidence as wp_compute_confidence,
-)
-from dataremoval.brokers.whitepages import (
-    _deduplicate as wp_deduplicate,
-)
-from dataremoval.brokers.whitepages import (
     _is_profile_url as wp_is_profile_url,
 )
 from dataremoval.brokers.whitepages import (
@@ -55,7 +69,7 @@ from dataremoval.brokers.whitepages import (
 from dataremoval.core.models import Address, Listing, Profile
 
 # ---------------------------------------------------------------------------
-# Registry tests (existing)
+# Registry tests
 # ---------------------------------------------------------------------------
 
 
@@ -88,9 +102,9 @@ def test_broker_info_complete():
         assert info.recheck_days > 0
 
 
-# ---------------------------------------------------------------------------
-# Spokeo — info
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Spokeo tests
+# ===========================================================================
 
 
 def test_info_fields():
@@ -103,11 +117,6 @@ def test_info_fields():
     assert info.difficulty.value == "medium"
     assert info.expected_days == 3
     assert info.recheck_days == 90
-
-
-# ---------------------------------------------------------------------------
-# Spokeo — helper functions
-# ---------------------------------------------------------------------------
 
 
 def test_normalize_name():
@@ -147,68 +156,14 @@ def test_search_builds_urls_with_aliases():
     assert "https://www.spokeo.com/Jenny-Smith/IL" in urls
 
 
-def test_search_deduplicates_by_url():
-    base = dict(broker_id="spokeo", profile_id="abc")
-    listings = [
-        Listing(url="https://www.spokeo.com/p/1", **base),
-        Listing(url="https://www.spokeo.com/p/2", **base),
-        Listing(url="https://www.spokeo.com/p/1", **base),
-    ]
-    result = _deduplicate(listings)
-    assert len(result) == 2
-    assert [item.url for item in result] == [
-        "https://www.spokeo.com/p/1",
-        "https://www.spokeo.com/p/2",
-    ]
+def test_spokeo_is_profile_url_valid():
+    assert _is_profile_url("https://www.spokeo.com/Jane-Smith/IL/p12345678901") is True
+    assert _is_profile_url("/Jane-Smith/IL/p12345678901") is True
 
 
-# ---------------------------------------------------------------------------
-# Spokeo — confidence scoring
-# ---------------------------------------------------------------------------
-
-
-def test_confidence_exact_match():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        age=35,
-        addresses=[Address(state="IL", city="Springfield")],
-    )
-    score = _compute_confidence(profile, "Jane Smith", "Springfield, IL", "35")
-    assert score >= 0.7
-
-
-def test_confidence_name_only():
-    profile = Profile(first_name="Jane", last_name="Smith")
-    score = _compute_confidence(profile, "Jane Smith", "Los Angeles, CA", "")
-    assert 0.3 <= score <= 0.5
-
-
-def test_confidence_partial_name():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        addresses=[Address(state="IL")],
-    )
-    score = _compute_confidence(profile, "Jane M Smith", "Chicago, IL", "")
-    # Partial name match (0.3) + state (0.2) = 0.5
-    assert 0.4 <= score <= 0.6
-
-
-def test_confidence_with_relatives():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        relatives=["Alice Smith", "Bob Smith"],
-    )
-    score = _compute_confidence(profile, "Jane Smith", "", "", found_relatives=["Alice Smith"])
-    # Name (0.4) + 1 relative (0.05)
-    assert score >= 0.4
-
-
-# ---------------------------------------------------------------------------
-# Spokeo — search (mocked)
-# ---------------------------------------------------------------------------
+def test_spokeo_is_profile_url_invalid():
+    assert _is_profile_url("https://www.spokeo.com/people/search") is False
+    assert _is_profile_url("https://www.spokeo.com/privacy") is False
 
 
 @pytest.mark.asyncio
@@ -218,11 +173,6 @@ async def test_search_returns_empty_without_playwright():
     with patch("dataremoval.brokers.spokeo.HAS_PLAYWRIGHT", False):
         result = await plugin.search(profile)
     assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Spokeo — opt-out (mocked)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -252,67 +202,9 @@ async def test_opt_out_returns_false_without_email():
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# Spokeo — check_status (mocked httpx)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_check_status_removed():
-    plugin = SpokeoPlugin()
-    listing = Listing(broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1")
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 404
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("dataremoval.brokers.spokeo.httpx.AsyncClient", return_value=mock_client):
-        result = await plugin.check_status(listing)
-    assert result == "removed"
-
-
-@pytest.mark.asyncio
-async def test_check_status_still_listed():
-    plugin = SpokeoPlugin()
-    listing = Listing(broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1")
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 200
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("dataremoval.brokers.spokeo.httpx.AsyncClient", return_value=mock_client):
-        result = await plugin.check_status(listing)
-    assert result == "still_listed"
-
-
-@pytest.mark.asyncio
-async def test_check_status_exception():
-    plugin = SpokeoPlugin()
-    listing = Listing(broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1")
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch("dataremoval.brokers.spokeo.httpx.AsyncClient", return_value=mock_client):
-        result = await plugin.check_status(listing)
-    assert result == "unknown"
-
-
 # ===========================================================================
 # TruePeopleSearch tests
 # ===========================================================================
-
-
-# ---------------------------------------------------------------------------
-# TruePeopleSearch — info
-# ---------------------------------------------------------------------------
 
 
 def test_truepeoplesearch_info_fields():
@@ -326,11 +218,6 @@ def test_truepeoplesearch_info_fields():
     assert info.expected_days == 1
     assert info.recheck_days == 90
     assert "DataDome" in info.notes
-
-
-# ---------------------------------------------------------------------------
-# TruePeopleSearch — helper functions
-# ---------------------------------------------------------------------------
 
 
 def test_tps_build_search_url_with_location():
@@ -393,78 +280,6 @@ def test_tps_is_profile_url_invalid():
     assert tps_is_profile_url("https://www.google.com") is False
 
 
-def test_tps_deduplicate():
-    base = dict(broker_id="truepeoplesearch", profile_id="abc")
-    listings = [
-        Listing(url="https://www.truepeoplesearch.com/find/person/aaa", **base),
-        Listing(url="https://www.truepeoplesearch.com/find/person/bbb", **base),
-        Listing(url="https://www.truepeoplesearch.com/find/person/aaa", **base),
-    ]
-    result = tps_deduplicate(listings)
-    assert len(result) == 2
-    assert [item.url for item in result] == [
-        "https://www.truepeoplesearch.com/find/person/aaa",
-        "https://www.truepeoplesearch.com/find/person/bbb",
-    ]
-
-
-# ---------------------------------------------------------------------------
-# TruePeopleSearch — confidence scoring
-# ---------------------------------------------------------------------------
-
-
-def test_tps_confidence_exact_match():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        age=35,
-        addresses=[Address(state="IL", city="Springfield")],
-    )
-    score = tps_compute_confidence(profile, "Jane Smith", "Springfield, IL", "Age 35")
-    assert score >= 0.7
-
-
-def test_tps_confidence_name_only():
-    profile = Profile(first_name="Jane", last_name="Smith")
-    score = tps_compute_confidence(profile, "Jane Smith", "Los Angeles, CA", "")
-    assert 0.3 <= score <= 0.5
-
-
-def test_tps_confidence_partial_name():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        addresses=[Address(state="IL")],
-    )
-    score = tps_compute_confidence(profile, "Jane M Smith", "Chicago, IL", "")
-    # Partial name (0.3) + state (0.2) = 0.5
-    assert 0.4 <= score <= 0.6
-
-
-def test_tps_confidence_age_text_format():
-    """TruePeopleSearch shows age as 'Age 35', not just '35'."""
-    profile = Profile(first_name="Jane", last_name="Smith", age=35)
-    score = tps_compute_confidence(profile, "Jane Smith", "", "Age 35")
-    # Name (0.4) + age (0.15) = 0.55
-    assert score >= 0.5
-
-
-def test_tps_confidence_with_relatives():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        relatives=["Alice Smith", "Bob Smith"],
-    )
-    score = tps_compute_confidence(profile, "Jane Smith", "", "", found_relatives=["Alice Smith"])
-    # Name (0.4) + 1 relative (0.05) = 0.45
-    assert score >= 0.4
-
-
-# ---------------------------------------------------------------------------
-# TruePeopleSearch — search (mocked)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_tps_search_returns_empty_without_playwright():
     plugin = TruePeopleSearchPlugin()
@@ -472,11 +287,6 @@ async def test_tps_search_returns_empty_without_playwright():
     with patch("dataremoval.brokers.truepeoplesearch.HAS_PLAYWRIGHT", False):
         result = await plugin.search(profile)
     assert result == []
-
-
-# ---------------------------------------------------------------------------
-# TruePeopleSearch — opt-out (mocked)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -492,113 +302,9 @@ async def test_tps_opt_out_returns_false_without_playwright():
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# TruePeopleSearch — check_status (mocked httpx)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_tps_check_status_removed():
-    plugin = TruePeopleSearchPlugin()
-    listing = Listing(
-        broker_id="truepeoplesearch",
-        profile_id="abc",
-        url="https://www.truepeoplesearch.com/find/person/aaa",
-    )
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 404
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "removed"
-
-
-@pytest.mark.asyncio
-async def test_tps_check_status_still_listed():
-    plugin = TruePeopleSearchPlugin()
-    listing = Listing(
-        broker_id="truepeoplesearch",
-        profile_id="abc",
-        url="https://www.truepeoplesearch.com/find/person/aaa",
-    )
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 200
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "still_listed"
-
-
-@pytest.mark.asyncio
-async def test_tps_check_status_cloudflare_403():
-    """Cloudflare 403 should return 'unknown', not 'still_listed'."""
-    plugin = TruePeopleSearchPlugin()
-    listing = Listing(
-        broker_id="truepeoplesearch",
-        profile_id="abc",
-        url="https://www.truepeoplesearch.com/find/person/aaa",
-    )
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 403
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "unknown"
-
-
-@pytest.mark.asyncio
-async def test_tps_check_status_exception():
-    plugin = TruePeopleSearchPlugin()
-    listing = Listing(
-        broker_id="truepeoplesearch",
-        profile_id="abc",
-        url="https://www.truepeoplesearch.com/find/person/aaa",
-    )
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "dataremoval.brokers.truepeoplesearch.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "unknown"
-
-
 # ===========================================================================
 # Whitepages tests
 # ===========================================================================
-
-
-# ---------------------------------------------------------------------------
-# Whitepages — info
-# ---------------------------------------------------------------------------
 
 
 def test_whitepages_info_fields():
@@ -612,11 +318,6 @@ def test_whitepages_info_fields():
     assert info.expected_days == 2
     assert info.recheck_days == 90
     assert "phone" in info.notes.lower()
-
-
-# ---------------------------------------------------------------------------
-# Whitepages — helper functions
-# ---------------------------------------------------------------------------
 
 
 def test_wp_normalize_name():
@@ -682,70 +383,6 @@ def test_wp_is_profile_url_invalid():
     assert wp_is_profile_url("https://www.google.com") is False
 
 
-def test_wp_deduplicate():
-    base = dict(broker_id="whitepages", profile_id="abc")
-    listings = [
-        Listing(url="https://www.whitepages.com/name/Jane-Smith/Springfield-IL", **base),
-        Listing(url="https://www.whitepages.com/name/Jane-Smith/Chicago-IL", **base),
-        Listing(url="https://www.whitepages.com/name/Jane-Smith/Springfield-IL", **base),
-    ]
-    result = wp_deduplicate(listings)
-    assert len(result) == 2
-    assert [item.url for item in result] == [
-        "https://www.whitepages.com/name/Jane-Smith/Springfield-IL",
-        "https://www.whitepages.com/name/Jane-Smith/Chicago-IL",
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Whitepages — confidence scoring
-# ---------------------------------------------------------------------------
-
-
-def test_wp_confidence_exact_match():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        age=35,
-        addresses=[Address(state="IL", city="Springfield")],
-    )
-    score = wp_compute_confidence(profile, "Jane Smith", "Springfield, IL", "Age 35")
-    assert score >= 0.7
-
-
-def test_wp_confidence_name_only():
-    profile = Profile(first_name="Jane", last_name="Smith")
-    score = wp_compute_confidence(profile, "Jane Smith", "Los Angeles, CA", "")
-    assert 0.3 <= score <= 0.5
-
-
-def test_wp_confidence_partial_name():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        addresses=[Address(state="IL")],
-    )
-    score = wp_compute_confidence(profile, "Jane M Smith", "Chicago, IL", "")
-    # Partial name (0.3) + state (0.2) = 0.5
-    assert 0.4 <= score <= 0.6
-
-
-def test_wp_confidence_with_relatives():
-    profile = Profile(
-        first_name="Jane",
-        last_name="Smith",
-        relatives=["Alice Smith", "Bob Smith"],
-    )
-    score = wp_compute_confidence(profile, "Jane Smith", "", "", found_relatives=["Alice Smith"])
-    # Name (0.4) + 1 relative (0.05) = 0.45
-    assert score >= 0.4
-
-
-# ---------------------------------------------------------------------------
-# Whitepages — search (mocked)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_wp_search_returns_empty_without_playwright():
     plugin = WhitepagesPlugin()
@@ -753,11 +390,6 @@ async def test_wp_search_returns_empty_without_playwright():
     with patch("dataremoval.brokers.whitepages.HAS_PLAYWRIGHT", False):
         result = await plugin.search(profile)
     assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Whitepages — opt-out (mocked)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -773,100 +405,500 @@ async def test_wp_opt_out_returns_false_without_playwright():
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# Whitepages — check_status (mocked httpx)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# FastPeopleSearch tests
+# ===========================================================================
+
+
+def test_fps_info_fields():
+    plugin = FastPeopleSearchPlugin()
+    info = plugin.info()
+    assert info.id == "fastpeoplesearch"
+    assert info.name == "FastPeopleSearch"
+    assert info.url == "https://www.fastpeoplesearch.com"
+    assert info.opt_out_url == "https://www.fastpeoplesearch.com/removal"
+    assert info.difficulty.value == "easy"
+    assert info.expected_days == 3
+
+
+def test_fps_build_search_url_with_location():
+    url = fps_build_search_url("Jane", "Smith", "Springfield", "IL")
+    assert url == "https://www.fastpeoplesearch.com/name/Jane-Smith_Springfield-IL"
+
+
+def test_fps_build_search_url_name_only():
+    url = fps_build_search_url("Jane", "Smith")
+    assert url == "https://www.fastpeoplesearch.com/name/Jane-Smith"
+
+
+def test_fps_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL", city="Springfield")],
+    )
+    urls = fps_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "Jane-Smith_Springfield-IL" in urls[0]
+
+
+def test_fps_is_profile_url_valid():
+    assert fps_is_profile_url("https://www.fastpeoplesearch.com/name/Jane-Smith") is True
+    assert fps_is_profile_url("/name/Jane-Smith_Springfield-IL") is True
+
+
+def test_fps_is_profile_url_invalid():
+    assert fps_is_profile_url("https://www.fastpeoplesearch.com/removal") is False
+    assert fps_is_profile_url("https://www.google.com") is False
 
 
 @pytest.mark.asyncio
-async def test_wp_check_status_removed():
-    plugin = WhitepagesPlugin()
-    listing = Listing(
-        broker_id="whitepages",
-        profile_id="abc",
-        url="https://www.whitepages.com/name/Jane-Smith/Springfield-IL",
-    )
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 404
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "dataremoval.brokers.whitepages.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "removed"
+async def test_fps_search_returns_empty_without_playwright():
+    plugin = FastPeopleSearchPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.fastpeoplesearch.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
 
 
 @pytest.mark.asyncio
-async def test_wp_check_status_still_listed():
-    plugin = WhitepagesPlugin()
+async def test_fps_opt_out_returns_false_without_playwright():
+    plugin = FastPeopleSearchPlugin()
     listing = Listing(
-        broker_id="whitepages",
+        broker_id="fastpeoplesearch",
         profile_id="abc",
-        url="https://www.whitepages.com/name/Jane-Smith/Springfield-IL",
+        url="https://www.fastpeoplesearch.com/name/Jane-Smith",
     )
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 200
+    with patch("dataremoval.brokers.fastpeoplesearch.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
 
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch(
-        "dataremoval.brokers.whitepages.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "still_listed"
+# ===========================================================================
+# ThatsThem tests
+# ===========================================================================
+
+
+def test_tt_info_fields():
+    plugin = ThatsThemPlugin()
+    info = plugin.info()
+    assert info.id == "thatsthem"
+    assert info.name == "ThatsThem"
+    assert info.url == "https://thatsthem.com"
+    assert info.opt_out_url == "https://thatsthem.com/optout"
+    assert info.difficulty.value == "easy"
+    assert info.expected_days == 14
+
+
+def test_tt_build_search_url_with_location():
+    url = tt_build_search_url("Jane", "Smith", "Springfield", "IL")
+    assert url == "https://thatsthem.com/name/Jane-Smith/Springfield-IL"
+
+
+def test_tt_build_search_url_name_only():
+    url = tt_build_search_url("Jane", "Smith")
+    assert url == "https://thatsthem.com/name/Jane-Smith"
+
+
+def test_tt_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL", city="Springfield")],
+    )
+    urls = tt_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "Jane-Smith/Springfield-IL" in urls[0]
+
+
+def test_tt_is_profile_url_valid():
+    assert tt_is_profile_url("https://thatsthem.com/name/Jane-Smith/") is True
+    assert tt_is_profile_url("/name/Jane-Smith/Springfield-IL/") is True
+
+
+def test_tt_is_profile_url_invalid():
+    assert tt_is_profile_url("https://thatsthem.com/optout") is False
+    assert tt_is_profile_url("https://www.google.com") is False
 
 
 @pytest.mark.asyncio
-async def test_wp_check_status_cloudflare_403():
-    """Cloudflare 403 should return 'unknown', not 'still_listed'."""
-    plugin = WhitepagesPlugin()
-    listing = Listing(
-        broker_id="whitepages",
-        profile_id="abc",
-        url="https://www.whitepages.com/name/Jane-Smith/Springfield-IL",
-    )
-    mock_resp = AsyncMock()
-    mock_resp.status_code = 403
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    with patch(
-        "dataremoval.brokers.whitepages.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "unknown"
+async def test_tt_search_returns_empty_without_playwright():
+    plugin = ThatsThemPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.thatsthem.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
 
 
 @pytest.mark.asyncio
-async def test_wp_check_status_exception():
-    plugin = WhitepagesPlugin()
+async def test_tt_opt_out_returns_false_without_playwright():
+    plugin = ThatsThemPlugin()
     listing = Listing(
-        broker_id="whitepages",
+        broker_id="thatsthem",
         profile_id="abc",
-        url="https://www.whitepages.com/name/Jane-Smith/Springfield-IL",
+        url="https://thatsthem.com/name/Jane-Smith/",
     )
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch("dataremoval.brokers.thatsthem.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
 
-    with patch(
-        "dataremoval.brokers.whitepages.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        result = await plugin.check_status(listing)
-    assert result == "unknown"
+
+# ===========================================================================
+# USPhonebook tests
+# ===========================================================================
+
+
+def test_usph_info_fields():
+    plugin = USPhonebookPlugin()
+    info = plugin.info()
+    assert info.id == "usphonebook"
+    assert info.name == "USPhonebook"
+    assert info.url == "https://www.usphonebook.com"
+    assert info.opt_out_url == "https://www.usphonebook.com/opt-out/submit"
+    assert info.difficulty.value == "easy"
+    assert info.expected_days == 3
+
+
+def test_usph_build_search_url_with_state():
+    url = usph_build_search_url("Jane", "Smith", "Illinois")
+    assert url == "https://www.usphonebook.com/Jane-Smith/Illinois"
+
+
+def test_usph_build_search_url_name_only():
+    url = usph_build_search_url("Jane", "Smith")
+    assert url == "https://www.usphonebook.com/Jane-Smith"
+
+
+def test_usph_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL")],
+    )
+    urls = usph_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "Jane-Smith/IL" in urls[0]
+
+
+def test_usph_is_profile_url_valid():
+    assert usph_is_profile_url("https://www.usphonebook.com/Jane-Smith/Illinois/abc123") is True
+    assert usph_is_profile_url("/Jane-Smith/IL/detail123") is True
+
+
+def test_usph_is_profile_url_invalid():
+    assert usph_is_profile_url("https://www.usphonebook.com/opt-out") is False
+    assert usph_is_profile_url("https://www.google.com") is False
+
+
+@pytest.mark.asyncio
+async def test_usph_search_returns_empty_without_playwright():
+    plugin = USPhonebookPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.usphonebook.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_usph_opt_out_returns_false_without_playwright():
+    plugin = USPhonebookPlugin()
+    listing = Listing(
+        broker_id="usphonebook",
+        profile_id="abc",
+        url="https://www.usphonebook.com/Jane-Smith/Illinois/abc123",
+    )
+    with patch("dataremoval.brokers.usphonebook.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
+
+
+# ===========================================================================
+# BeenVerified tests
+# ===========================================================================
+
+
+def test_bv_info_fields():
+    plugin = BeenVerifiedPlugin()
+    info = plugin.info()
+    assert info.id == "beenverified"
+    assert info.name == "BeenVerified"
+    assert info.url == "https://www.beenverified.com"
+    assert info.opt_out_url == "https://www.beenverified.com/svc/optout/search/optouts"
+    assert info.difficulty.value == "easy"
+    assert info.expected_days == 2
+
+
+def test_bv_build_search_url_with_state():
+    url = bv_build_search_url("Jane", "Smith", "Illinois")
+    assert url == "https://www.beenverified.com/people/Jane-Smith/Illinois/"
+
+
+def test_bv_build_search_url_name_only():
+    url = bv_build_search_url("Jane", "Smith")
+    assert url == "https://www.beenverified.com/people/Jane-Smith/"
+
+
+def test_bv_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL")],
+    )
+    urls = bv_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "Jane-Smith/IL/" in urls[0]
+
+
+def test_bv_is_profile_url_valid():
+    assert (
+        bv_is_profile_url("https://www.beenverified.com/people/Jane-Smith/Illinois/Pabc123") is True
+    )
+    assert bv_is_profile_url("/people/Jane-Smith/IL/Pxyz789") is True
+
+
+def test_bv_is_profile_url_invalid():
+    assert bv_is_profile_url("https://www.beenverified.com/people/Jane-Smith/") is False
+    assert bv_is_profile_url("https://www.google.com") is False
+
+
+@pytest.mark.asyncio
+async def test_bv_search_returns_empty_without_playwright():
+    plugin = BeenVerifiedPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.beenverified.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_bv_opt_out_returns_false_without_playwright():
+    plugin = BeenVerifiedPlugin()
+    listing = Listing(
+        broker_id="beenverified",
+        profile_id="abc",
+        url="https://www.beenverified.com/people/Jane-Smith/Illinois/Pabc123",
+    )
+    with patch("dataremoval.brokers.beenverified.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
+
+
+# ===========================================================================
+# Radaris tests
+# ===========================================================================
+
+
+def test_rad_info_fields():
+    plugin = RadarisPlugin()
+    info = plugin.info()
+    assert info.id == "radaris"
+    assert info.name == "Radaris"
+    assert info.url == "https://radaris.com"
+    assert info.opt_out_url == "https://radaris.com/control/privacy"
+    assert info.difficulty.value == "easy"
+    assert info.expected_days == 1
+
+
+def test_rad_build_search_url():
+    url = rad_build_search_url("Jane", "Smith")
+    assert url == "https://radaris.com/p/Jane-Smith/"
+
+
+def test_rad_build_search_urls_deduplicates():
+    """Radaris doesn't use location in URL, so aliases with same name deduplicate."""
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL"), Address(state="CA")],
+    )
+    urls = rad_build_search_urls(profile)
+    # Both addresses produce same URL since Radaris doesn't use location
+    assert len(urls) == 1
+    assert urls[0] == "https://radaris.com/p/Jane-Smith/"
+
+
+def test_rad_build_search_urls_with_aliases():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        aliases=["Jenny Smith"],
+        addresses=[Address(state="IL")],
+    )
+    urls = rad_build_search_urls(profile)
+    assert len(urls) == 2
+    assert "https://radaris.com/p/Jane-Smith/" in urls
+    assert "https://radaris.com/p/Jenny-Smith/" in urls
+
+
+def test_rad_is_profile_url_valid():
+    assert rad_is_profile_url("https://radaris.com/p/Jane-Smith/") is True
+    assert rad_is_profile_url("/p/Jane-Smith/") is True
+
+
+def test_rad_is_profile_url_invalid():
+    assert rad_is_profile_url("https://radaris.com/control/privacy") is False
+    assert rad_is_profile_url("https://www.google.com") is False
+
+
+@pytest.mark.asyncio
+async def test_rad_search_returns_empty_without_playwright():
+    plugin = RadarisPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.radaris.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_rad_opt_out_returns_false_without_playwright():
+    plugin = RadarisPlugin()
+    listing = Listing(
+        broker_id="radaris",
+        profile_id="abc",
+        url="https://radaris.com/p/Jane-Smith/",
+    )
+    with patch("dataremoval.brokers.radaris.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
+
+
+# ===========================================================================
+# PeopleFinder tests
+# ===========================================================================
+
+
+def test_pf_info_fields():
+    plugin = PeopleFinderPlugin()
+    info = plugin.info()
+    assert info.id == "peoplefinder"
+    assert info.name == "PeopleFinder"
+    assert info.url == "https://www.peoplefinder.com"
+    assert info.opt_out_url == "https://www.peoplefinder.com/opt-out"
+    assert info.difficulty.value == "medium"
+    assert info.expected_days == 9
+
+
+def test_pf_build_search_url_with_location():
+    url = pf_build_search_url("Jane", "Smith", "Springfield", "IL")
+    assert url == "https://www.peoplefinder.com/people/Jane-Smith/Springfield-IL"
+
+
+def test_pf_build_search_url_name_only():
+    url = pf_build_search_url("Jane", "Smith")
+    assert url == "https://www.peoplefinder.com/people/Jane-Smith"
+
+
+def test_pf_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL", city="Springfield")],
+    )
+    urls = pf_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "Jane-Smith/Springfield-IL" in urls[0]
+
+
+def test_pf_is_profile_url_valid():
+    assert (
+        pf_is_profile_url("https://www.peoplefinder.com/people/Jane-Smith/Illinois/abc123") is True
+    )
+    assert pf_is_profile_url("/people/Jane-Smith/IL/detail") is True
+
+
+def test_pf_is_profile_url_invalid():
+    assert pf_is_profile_url("https://www.peoplefinder.com/opt-out") is False
+    assert pf_is_profile_url("https://www.google.com") is False
+
+
+@pytest.mark.asyncio
+async def test_pf_search_returns_empty_without_playwright():
+    plugin = PeopleFinderPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.peoplefinder.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_pf_opt_out_returns_false_without_playwright():
+    plugin = PeopleFinderPlugin()
+    listing = Listing(
+        broker_id="peoplefinder",
+        profile_id="abc",
+        url="https://www.peoplefinder.com/people/Jane-Smith/Illinois/abc123",
+    )
+    with patch("dataremoval.brokers.peoplefinder.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
+
+
+# ===========================================================================
+# Intelius tests
+# ===========================================================================
+
+
+def test_int_info_fields():
+    plugin = InteliusPlugin()
+    info = plugin.info()
+    assert info.id == "intelius"
+    assert info.name == "Intelius"
+    assert info.url == "https://www.intelius.com"
+    assert info.opt_out_url == "https://www.intelius.com/opt-out"
+    assert info.difficulty.value == "medium"
+    assert info.expected_days == 3
+    assert info.mail_address == "PO Box 24025, Seattle, WA 98124"
+    assert "PeopleConnect" in info.notes
+
+
+def test_int_build_search_url_with_state():
+    url = int_build_search_url("Jane", "Smith", "IL")
+    assert url == "https://www.intelius.com/people-search/Jane-Smith/IL/"
+
+
+def test_int_build_search_url_name_only():
+    url = int_build_search_url("Jane", "Smith")
+    assert url == "https://www.intelius.com/people-search/Jane-Smith/"
+
+
+def test_int_build_search_urls_from_profile():
+    profile = Profile(
+        first_name="Jane",
+        last_name="Smith",
+        addresses=[Address(state="IL")],
+    )
+    urls = int_build_search_urls(profile)
+    assert len(urls) == 1
+    assert "Jane-Smith/IL/" in urls[0]
+
+
+def test_int_is_profile_url_valid():
+    assert int_is_profile_url("https://www.intelius.com/people-search/Jane-Smith/Illinois/") is True
+    assert int_is_profile_url("/people-search/Jane-Smith/IL/") is True
+
+
+def test_int_is_profile_url_invalid():
+    assert int_is_profile_url("https://www.intelius.com/opt-out") is False
+    assert int_is_profile_url("https://www.google.com") is False
+
+
+@pytest.mark.asyncio
+async def test_int_search_returns_empty_without_playwright():
+    plugin = InteliusPlugin()
+    profile = Profile(first_name="Jane", last_name="Smith")
+    with patch("dataremoval.brokers.intelius.HAS_PLAYWRIGHT", False):
+        result = await plugin.search(profile)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_int_opt_out_returns_false_without_playwright():
+    plugin = InteliusPlugin()
+    listing = Listing(
+        broker_id="intelius",
+        profile_id="abc",
+        url="https://www.intelius.com/people-search/Jane-Smith/Illinois/",
+    )
+    with patch("dataremoval.brokers.intelius.HAS_PLAYWRIGHT", False):
+        result = await plugin.submit_opt_out(listing)
+    assert result is False
