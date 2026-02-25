@@ -325,7 +325,7 @@ def test_truepeoplesearch_info_fields():
     assert info.difficulty.value == "easy"
     assert info.expected_days == 1
     assert info.recheck_days == 90
-    assert "Cloudflare" in info.notes
+    assert "DataDome" in info.notes
 
 
 # ---------------------------------------------------------------------------
@@ -667,13 +667,18 @@ def test_wp_build_search_urls_no_address():
 
 
 def test_wp_is_profile_url_valid():
-    assert wp_is_profile_url("https://www.whitepages.com/name/Jane-Smith/Springfield-IL") is True
-    assert wp_is_profile_url("/name/Jane-Smith/Springfield-IL") is True
+    assert (
+        wp_is_profile_url("https://www.whitepages.com/name/Jane-Smith/Springfield-IL/PX3vB7kO0L3")
+        is True
+    )
+    assert wp_is_profile_url("/name/Jane-Smith/Springfield-IL/PAyLqRDVZz3") is True
 
 
 def test_wp_is_profile_url_invalid():
     assert wp_is_profile_url("https://www.whitepages.com/suppression-requests") is False
     assert wp_is_profile_url("https://www.whitepages.com/name/Jane-Smith") is False
+    # Search page URL (no person ID) should not match
+    assert wp_is_profile_url("https://www.whitepages.com/name/Jane-Smith/Springfield-IL") is False
     assert wp_is_profile_url("https://www.google.com") is False
 
 
