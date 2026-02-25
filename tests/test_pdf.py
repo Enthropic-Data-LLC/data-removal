@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from dataremoval.core.models import Address, Listing, Profile
-from dataremoval.pdf import generate_opt_out_letter
+from dataremoval.pdf import HAS_FPDF, generate_opt_out_letter
+
+pytestmark = pytest.mark.skipif(not HAS_FPDF, reason="fpdf2 not installed")
 
 
 @pytest.fixture()
