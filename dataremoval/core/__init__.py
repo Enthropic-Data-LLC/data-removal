@@ -1,3 +1,4 @@
+from dataremoval.core.database import Database
 from dataremoval.core.models import (
     Address,
     Listing,
@@ -5,7 +6,6 @@ from dataremoval.core.models import (
     RemovalRequest,
     RemovalState,
 )
-from dataremoval.core.database import Database
 
 __all__ = [
     "Address",

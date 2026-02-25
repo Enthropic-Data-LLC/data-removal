@@ -15,7 +15,6 @@ from dataremoval.brokers.spokeo import (
 )
 from dataremoval.core.models import Address, Listing, Profile
 
-
 # ---------------------------------------------------------------------------
 # Registry tests (existing)
 # ---------------------------------------------------------------------------
@@ -118,7 +117,7 @@ def test_search_deduplicates_by_url():
     ]
     result = _deduplicate(listings)
     assert len(result) == 2
-    assert [l.url for l in result] == [
+    assert [item.url for item in result] == [
         "https://www.spokeo.com/p/1",
         "https://www.spokeo.com/p/2",
     ]
@@ -163,9 +162,7 @@ def test_confidence_with_relatives():
         last_name="Smith",
         relatives=["Alice Smith", "Bob Smith"],
     )
-    score = _compute_confidence(
-        profile, "Jane Smith", "", "", found_relatives=["Alice Smith"]
-    )
+    score = _compute_confidence(profile, "Jane Smith", "", "", found_relatives=["Alice Smith"])
     # Name (0.4) + 1 relative (0.05)
     assert score >= 0.4
 
@@ -224,9 +221,7 @@ async def test_opt_out_returns_false_without_email():
 @pytest.mark.asyncio
 async def test_check_status_removed():
     plugin = SpokeoPlugin()
-    listing = Listing(
-        broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1"
-    )
+    listing = Listing(broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1")
     mock_resp = AsyncMock()
     mock_resp.status_code = 404
 
@@ -243,9 +238,7 @@ async def test_check_status_removed():
 @pytest.mark.asyncio
 async def test_check_status_still_listed():
     plugin = SpokeoPlugin()
-    listing = Listing(
-        broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1"
-    )
+    listing = Listing(broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1")
     mock_resp = AsyncMock()
     mock_resp.status_code = 200
 
@@ -262,9 +255,7 @@ async def test_check_status_still_listed():
 @pytest.mark.asyncio
 async def test_check_status_exception():
     plugin = SpokeoPlugin()
-    listing = Listing(
-        broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1"
-    )
+    listing = Listing(broker_id="spokeo", profile_id="abc", url="https://www.spokeo.com/p/1")
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection failed"))
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)

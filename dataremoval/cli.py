@@ -22,20 +22,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 
-from dataremoval.core.database import Database
-from dataremoval.core.models import Address, Profile, RemovalState
-from dataremoval.core.engine import Engine
 from dataremoval.brokers import registry
+from dataremoval.core.database import Database
+from dataremoval.core.engine import Engine
+from dataremoval.core.models import Address, Profile, RemovalState
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -61,7 +59,7 @@ def _db() -> Database:
     return Database()
 
 
-def _default_profile(db: Database, profile_id: Optional[str]) -> Profile:
+def _default_profile(db: Database, profile_id: str | None) -> Profile:
     """Resolve profile — use given ID or the first (only) profile."""
     if profile_id:
         p = db.get_profile(profile_id)
@@ -84,6 +82,7 @@ def _default_profile(db: Database, profile_id: Optional[str]) -> Profile:
 # ---------------------------------------------------------------------------
 # Profile commands
 # ---------------------------------------------------------------------------
+
 
 @profile_app.command("add")
 def profile_add(
@@ -118,14 +117,16 @@ def profile_add(
     db.save_profile(profile)
     db.close()
 
-    console.print(Panel(
-        f"[bold green]Profile created[/bold green]\n\n"
-        f"  ID:   {profile.id}\n"
-        f"  Name: {profile.full_name}\n"
-        f"  City: {city or '—'}  State: {state or '—'}\n\n"
-        f"Next: [bold]dr scan --profile {profile.id}[/bold]",
-        title="✓ Profile Added",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]Profile created[/bold green]\n\n"
+            f"  ID:   {profile.id}\n"
+            f"  Name: {profile.full_name}\n"
+            f"  City: {city or '—'}  State: {state or '—'}\n\n"
+            f"Next: [bold]dr scan --profile {profile.id}[/bold]",
+            title="✓ Profile Added",
+        )
+    )
 
 
 @profile_app.command("list")
@@ -205,10 +206,11 @@ def profile_delete(
 # Scan / Remove / Monitor
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def scan(
-    profile_id: Optional[str] = typer.Option(None, "--profile", "-p"),
-    broker: Optional[str] = typer.Option(None, "--broker", "-b", help="Specific broker ID"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    broker: str | None = typer.Option(None, "--broker", "-b", help="Specific broker ID"),
 ):
     """Scan broker sites for your personal data."""
     db = _db()
@@ -234,18 +236,22 @@ def scan(
         table.add_column("Location")
         table.add_column("URL")
 
-        for l in listings:
-            table.add_row(l.broker_id, l.found_name, l.found_location, l.url)
+        for listing in listings:
+            table.add_row(
+                listing.broker_id, listing.found_name, listing.found_location, listing.url
+            )
         console.print(table)
         console.print(f"\nNext: [bold]dr remove --profile {profile.id}[/bold]")
     else:
-        console.print("[dim]No listings found (broker search not yet implemented for all sites).[/dim]")
+        console.print(
+            "[dim]No listings found (broker search not yet implemented for all sites).[/dim]"
+        )
 
 
 @app.command()
 def remove(
-    profile_id: Optional[str] = typer.Option(None, "--profile", "-p"),
-    broker: Optional[str] = typer.Option(None, "--broker", "-b"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    broker: str | None = typer.Option(None, "--broker", "-b"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be submitted"),
 ):
     """Submit opt-out requests for discovered listings."""
@@ -256,7 +262,8 @@ def remove(
     # Show what's pending
     requests = db.get_requests(profile_id=profile.id)
     actionable = [
-        r for r in requests
+        r
+        for r in requests
         if r.state in (RemovalState.DISCOVERED, RemovalState.FAILED, RemovalState.RE_LISTED)
         and (broker_ids is None or r.broker_id in broker_ids)
     ]
@@ -279,14 +286,16 @@ def remove(
     results = asyncio.run(engine.remove(profile.id, broker_ids=broker_ids))
     db.close()
 
-    console.print(f"\n[green]Submitted: {results['submitted']}[/green]  "
-                  f"[red]Failed: {results['failed']}[/red]  "
-                  f"[dim]Skipped: {results['skipped']}[/dim]")
+    console.print(
+        f"\n[green]Submitted: {results['submitted']}[/green]  "
+        f"[red]Failed: {results['failed']}[/red]  "
+        f"[dim]Skipped: {results['skipped']}[/dim]"
+    )
 
 
 @app.command()
 def status(
-    profile_id: Optional[str] = typer.Option(None, "--profile", "-p"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
 ):
     """Show removal status dashboard."""
     db = _db()
@@ -347,8 +356,8 @@ def status(
 
 @app.command()
 def monitor(
-    profile_id: Optional[str] = typer.Option(None, "--profile", "-p"),
-    broker: Optional[str] = typer.Option(None, "--broker", "-b"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    broker: str | None = typer.Option(None, "--broker", "-b"),
 ):
     """Re-check confirmed removals for re-listings."""
     db = _db()
@@ -370,6 +379,7 @@ def monitor(
 # ---------------------------------------------------------------------------
 # Broker commands
 # ---------------------------------------------------------------------------
+
 
 @broker_app.command("list")
 def brokers_list():
@@ -433,9 +443,10 @@ def broker_info(broker_id: str = typer.Argument(..., help="Broker ID")):
 # Export
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def export(
-    profile_id: Optional[str] = typer.Option(None, "--profile", "-p"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
     output: str = typer.Option("-", "--output", "-o", help="Output file (- for stdout)"),
 ):
     """Export all data as JSON."""
@@ -447,7 +458,7 @@ def export(
 
     data = {
         "profile": profile.model_dump(),
-        "listings": [l.model_dump() for l in listings],
+        "listings": [item.model_dump() for item in listings],
         "requests": [r.model_dump() for r in requests],
     }
 
@@ -463,6 +474,7 @@ def export(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _log_event(*args):
     """Simple event logger for engine callbacks."""

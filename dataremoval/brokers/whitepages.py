@@ -18,7 +18,6 @@ from dataremoval.core.models import Listing, Profile
 
 
 class WhitepagesPlugin(BrokerPlugin):
-
     def info(self) -> BrokerInfo:
         return BrokerInfo(
             id="whitepages",

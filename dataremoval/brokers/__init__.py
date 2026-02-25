@@ -5,20 +5,18 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from abc import ABC, abstractmethod
-from enum import Enum
-from pathlib import Path
-from typing import Optional
+from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from dataremoval.core.models import Listing, Profile
-
 
 # ---------------------------------------------------------------------------
 # Broker metadata (loaded from YAML config or defined in code)
 # ---------------------------------------------------------------------------
 
-class OptOutMethod(str, Enum):
+
+class OptOutMethod(StrEnum):
     ONLINE_FORM = "online_form"
     EMAIL = "email"
     MAIL = "mail"
@@ -26,7 +24,7 @@ class OptOutMethod(str, Enum):
     API = "api"
 
 
-class Difficulty(str, Enum):
+class Difficulty(StrEnum):
     EASY = "easy"
     MEDIUM = "medium"
     HARD = "hard"
@@ -34,21 +32,23 @@ class Difficulty(str, Enum):
 
 class BrokerInfo(BaseModel):
     """Static metadata about a broker site."""
-    id: str                                     # unique slug, e.g. "whitepages"
-    name: str                                   # display name
-    url: str                                    # homepage
-    category: str = "people_search"             # people_search, background, marketing
+
+    id: str  # unique slug, e.g. "whitepages"
+    name: str  # display name
+    url: str  # homepage
+    category: str = "people_search"  # people_search, background, marketing
     opt_out_method: OptOutMethod = OptOutMethod.ONLINE_FORM
     opt_out_url: str = ""
     difficulty: Difficulty = Difficulty.MEDIUM
-    expected_days: int = 3                      # typical removal time
-    recheck_days: int = 90                      # how often to re-check
+    expected_days: int = 3  # typical removal time
+    recheck_days: int = 90  # how often to re-check
     notes: str = ""
 
 
 # ---------------------------------------------------------------------------
 # Abstract broker plugin
 # ---------------------------------------------------------------------------
+
 
 class BrokerPlugin(ABC):
     """
@@ -104,6 +104,7 @@ class BrokerPlugin(ABC):
 # Plugin registry — auto-discovers broker modules
 # ---------------------------------------------------------------------------
 
+
 class BrokerRegistry:
     """Discovers and manages broker plugins."""
 
@@ -113,7 +114,7 @@ class BrokerRegistry:
     def register(self, plugin: BrokerPlugin) -> None:
         self._plugins[plugin.id] = plugin
 
-    def get(self, broker_id: str) -> Optional[BrokerPlugin]:
+    def get(self, broker_id: str) -> BrokerPlugin | None:
         return self._plugins.get(broker_id)
 
     def all(self) -> list[BrokerPlugin]:
@@ -125,6 +126,7 @@ class BrokerRegistry:
     def discover(self) -> None:
         """Auto-import all modules in dataremoval.brokers to trigger registration."""
         import dataremoval.brokers as broker_pkg
+
         for _importer, modname, _ispkg in pkgutil.iter_modules(broker_pkg.__path__):
             if not modname.startswith("_"):
                 importlib.import_module(f"dataremoval.brokers.{modname}")

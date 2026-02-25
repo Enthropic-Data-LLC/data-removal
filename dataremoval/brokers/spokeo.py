@@ -98,7 +98,10 @@ def _compute_confidence(
     profile_name = profile.full_name.lower()
     if found_name.lower() == profile_name:
         score += 0.4
-    elif profile.first_name.lower() in found_name.lower() and profile.last_name.lower() in found_name.lower():
+    elif (
+        profile.first_name.lower() in found_name.lower()
+        and profile.last_name.lower() in found_name.lower()
+    ):
         score += 0.3
 
     # State match (+0.2)
@@ -144,7 +147,6 @@ def _deduplicate(listings: list[Listing]) -> list[Listing]:
 
 
 class SpokeoPlugin(BrokerPlugin):
-
     def info(self) -> BrokerInfo:
         return BrokerInfo(
             id="spokeo",
@@ -196,7 +198,7 @@ class SpokeoPlugin(BrokerPlugin):
                             continue
 
                         text = (await card.inner_text()).strip()
-                        lines = [l.strip() for l in text.splitlines() if l.strip()]
+                        lines = [s.strip() for s in text.splitlines() if s.strip()]
 
                         found_name = lines[0] if lines else ""
                         found_location = lines[1] if len(lines) > 1 else ""
@@ -242,22 +244,28 @@ class SpokeoPlugin(BrokerPlugin):
                 browser = await pw.chromium.launch(headless=True)
                 try:
                     page = await browser.new_page(user_agent=USER_AGENT)
-                    await page.goto(OPT_OUT_URL, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+                    await page.goto(
+                        OPT_OUT_URL, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded"
+                    )
 
                     # Fill URL and email fields
-                    url_input = page.locator('input[name="url"], input[placeholder*="spokeo.com"]').first
+                    url_input = page.locator(
+                        'input[name="url"], input[placeholder*="spokeo.com"]'
+                    ).first
                     await url_input.fill(listing.url)
 
                     email_input = page.locator('input[name="email"], input[type="email"]').first
                     await email_input.fill(email)
 
                     # Click submit
-                    submit_btn = page.locator('button:has-text("OPT OUT"), button[type="submit"]').first
+                    submit_btn = page.locator(
+                        'button:has-text("OPT OUT"), button[type="submit"]'
+                    ).first
                     await submit_btn.click()
 
                     # Wait for confirmation
                     await page.wait_for_selector(
-                        'text=/check your email|confirmation|opt.?out.*submitted/i',
+                        "text=/check your email|confirmation|opt.?out.*submitted/i",
                         timeout=PAGE_TIMEOUT_MS,
                     )
                     return True

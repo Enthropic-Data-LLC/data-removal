@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
-from typing import Callable, Optional
+from collections.abc import Callable
+from datetime import datetime
 
 from dataremoval.brokers import BrokerPlugin, registry
+from dataremoval.core.database import Database
 from dataremoval.core.models import (
     Listing,
     Profile,
     RemovalRequest,
     RemovalState,
 )
-from dataremoval.core.database import Database
 
 
 class Engine:
@@ -24,7 +24,7 @@ class Engine:
     and persists state.
     """
 
-    def __init__(self, db: Database, on_event: Optional[Callable] = None):
+    def __init__(self, db: Database, on_event: Callable | None = None):
         self.db = db
         self.on_event = on_event or (lambda *a: None)
 
@@ -35,7 +35,7 @@ class Engine:
     async def scan(
         self,
         profile: Profile,
-        broker_ids: Optional[list[str]] = None,
+        broker_ids: list[str] | None = None,
         concurrency: int = 5,
     ) -> list[Listing]:
         """Search broker sites for listings matching a profile."""
@@ -77,13 +77,14 @@ class Engine:
     async def remove(
         self,
         profile_id: str,
-        broker_ids: Optional[list[str]] = None,
+        broker_ids: list[str] | None = None,
         concurrency: int = 3,
     ) -> dict[str, int]:
         """Submit opt-out requests for all DISCOVERED or FAILED listings."""
         requests = self.db.get_requests(profile_id=profile_id)
         targets = [
-            r for r in requests
+            r
+            for r in requests
             if r.state in (RemovalState.DISCOVERED, RemovalState.FAILED, RemovalState.RE_LISTED)
             and (broker_ids is None or r.broker_id in broker_ids)
         ]
@@ -129,12 +130,13 @@ class Engine:
     async def monitor(
         self,
         profile_id: str,
-        broker_ids: Optional[list[str]] = None,
+        broker_ids: list[str] | None = None,
     ) -> dict[str, int]:
         """Check status of monitoring/confirmed requests."""
         requests = self.db.get_requests(profile_id=profile_id)
         targets = [
-            r for r in requests
+            r
+            for r in requests
             if r.state in (RemovalState.CONFIRMED, RemovalState.MONITORING)
             and (broker_ids is None or r.broker_id in broker_ids)
         ]
@@ -176,13 +178,13 @@ class Engine:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _resolve_plugins(self, broker_ids: Optional[list[str]]) -> list[BrokerPlugin]:
+    def _resolve_plugins(self, broker_ids: list[str] | None) -> list[BrokerPlugin]:
         if broker_ids:
             plugins = [registry.get(bid) for bid in broker_ids]
             return [p for p in plugins if p is not None]
         return registry.all()
 
-    def _get_listing(self, listing_id: str) -> Optional[Listing]:
+    def _get_listing(self, listing_id: str) -> Listing | None:
         rows = self.db.get_listings()
         for listing in rows:
             if listing.id == listing_id:
