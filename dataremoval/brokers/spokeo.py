@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING
 
 import httpx
@@ -46,6 +47,19 @@ USER_AGENT = (
 )
 PAGE_TIMEOUT_MS = 20_000
 SEARCH_DELAY_SECONDS = 2
+
+# Profile links look like /David-Brown/North-Carolina/Charlotte/p3795149494909224758404708
+# We match the /p<digits> suffix to distinguish from /people/, /privacy, etc.
+_PROFILE_LINK_SEL = "a[href*='/p']"
+_PROFILE_URL_RE = re.compile(r"/p\d{5,}$")
+
+
+def _is_profile_url(url: str) -> bool:
+    """Return True if *url* looks like a Spokeo person profile page."""
+    from urllib.parse import urlparse
+
+    path = urlparse(url).path
+    return bool(_PROFILE_URL_RE.search(path))
 
 
 def _normalize_name(name: str) -> str:
@@ -167,16 +181,19 @@ class SpokeoPlugin(BrokerPlugin):
                         await asyncio.sleep(SEARCH_DELAY_SECONDS)
                     try:
                         await page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
-                        await page.wait_for_selector("a[href*='/p']", timeout=PAGE_TIMEOUT_MS)
+                        await page.wait_for_selector(_PROFILE_LINK_SEL, timeout=PAGE_TIMEOUT_MS)
                     except Exception:
                         log.debug("No results or timeout for %s", url)
                         continue
 
-                    cards = await page.query_selector_all("a[href*='/p']")
+                    cards = await page.query_selector_all(_PROFILE_LINK_SEL)
                     for card in cards:
                         href = await card.get_attribute("href") or ""
                         if not href.startswith("http"):
                             href = f"{BASE_URL}{href}"
+
+                        if not _is_profile_url(href):
+                            continue
 
                         text = (await card.inner_text()).strip()
                         lines = [l.strip() for l in text.splitlines() if l.strip()]
