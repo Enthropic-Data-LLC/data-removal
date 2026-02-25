@@ -1,0 +1,44 @@
+# Data Removal CLI — Profile Template
+# Copy this file to profile.yml and fill in your real information:
+#   cp profile.example.yml profile.yml
+#
+# Then import it:
+#   dr profile add --from profile.yml
+#
+# WARNING: profile.yml contains your PII — it is gitignored and must
+# NEVER be committed.
+
+first_name: Jane
+last_name: Doe
+middle_name: ""
+
+# Optional aliases (maiden name, nicknames, etc.)
+aliases:
+  - Jenny Doe
+
+date_of_birth: "1990-01-15"   # YYYY-MM-DD
+age: 36
+
+addresses:
+  - street: "123 Main St"
+    city: Springfield
+    state: IL
+    zip_code: "62701"
+    current: true
+  # Add previous addresses — brokers often list old locations
+  # - street: ""
+  #   city: Chicago
+  #   state: IL
+  #   zip_code: "60601"
+  #   current: false
+
+phone_numbers:
+  - "+12175551234"
+
+email_addresses:
+  - jane.doe@example.com
+
+# Names of relatives (helps match listings with higher confidence)
+relatives:
+  - John Doe
+  - Alice Doe

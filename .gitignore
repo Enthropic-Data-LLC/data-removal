@@ -31,3 +31,6 @@ Thumbs.db
 
 # Project
 *.db
+profile.yml
+profiles.yml
+GITHUB_SETUP.md
