@@ -75,9 +75,7 @@ _PROFILE_URL_RE = re.compile(r"/find/person/[a-z0-9]+", re.IGNORECASE)
 # Captcha detection
 _CAPTCHA_URL_FRAGMENT = "/InternalCaptcha"
 _CAPTCHA_INDICATOR_SEL = (
-    "form[action*='InternalCaptcha'], "
-    "iframe[src*='challenge'], "
-    "div.cf-turnstile"
+    "form[action*='InternalCaptcha'], iframe[src*='challenge'], div.cf-turnstile"
 )
 
 
@@ -86,9 +84,7 @@ _CAPTCHA_INDICATOR_SEL = (
 # ---------------------------------------------------------------------------
 
 
-def _build_search_url(
-    first: str, last: str, city: str = "", state: str = ""
-) -> str:
+def _build_search_url(first: str, last: str, city: str = "", state: str = "") -> str:
     """Build a TruePeopleSearch results URL.
 
     >>> _build_search_url("Jane", "Smith", "Springfield", "IL")
@@ -231,9 +227,7 @@ async def _wait_for_captcha(page: Page, description: str = "page") -> bool:
             await page.wait_for_load_state("domcontentloaded")
             return True
 
-    log.error(
-        "Captcha timeout after %d seconds on %s", int(CAPTCHA_TIMEOUT), description
-    )
+    log.error("Captcha timeout after %d seconds on %s", int(CAPTCHA_TIMEOUT), description)
     return False
 
 
@@ -243,9 +237,7 @@ async def _needs_visible_browser(pw: Playwright, test_url: str) -> bool:
     try:
         page = await browser.new_page(user_agent=USER_AGENT)
         try:
-            await page.goto(
-                test_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded"
-            )
+            await page.goto(test_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
         except Exception:
             return True  # navigation failure → fall back to visible
         return await _is_captcha_page(page)
@@ -339,9 +331,7 @@ class TruePeopleSearchPlugin(BrokerPlugin):
             # Probe first URL to decide headless vs visible
             use_visible = await _needs_visible_browser(pw, urls[0])
             if use_visible:
-                log.info(
-                    "Captcha detected — launching visible browser for manual solving"
-                )
+                log.info("Captcha detected — launching visible browser for manual solving")
 
             browser = await _launch_browser(pw, headless=not use_visible)
             try:
@@ -368,9 +358,7 @@ class TruePeopleSearchPlugin(BrokerPlugin):
 
                     # Wait for result cards
                     try:
-                        await page.wait_for_selector(
-                            _RESULT_CARD_SEL, timeout=PAGE_TIMEOUT_MS
-                        )
+                        await page.wait_for_selector(_RESULT_CARD_SEL, timeout=PAGE_TIMEOUT_MS)
                     except Exception:
                         log.debug("No result cards found for %s", url)
                         continue
@@ -404,9 +392,7 @@ class TruePeopleSearchPlugin(BrokerPlugin):
                 # Probe for captcha
                 use_visible = await _needs_visible_browser(pw, listing.url)
                 if use_visible:
-                    log.info(
-                        "Captcha detected — launching visible browser for opt-out"
-                    )
+                    log.info("Captcha detected — launching visible browser for opt-out")
 
                 browser = await _launch_browser(pw, headless=not use_visible)
                 try:
@@ -433,9 +419,7 @@ class TruePeopleSearchPlugin(BrokerPlugin):
                     await remove_btn.click(timeout=PAGE_TIMEOUT_MS)
 
                     # Handle any confirmation captcha
-                    if not await _wait_for_captcha(
-                        page, description="removal confirmation"
-                    ):
+                    if not await _wait_for_captcha(page, description="removal confirmation"):
                         log.error("Could not pass captcha on removal confirmation")
                         return False
 

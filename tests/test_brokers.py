@@ -315,8 +315,7 @@ def test_truepeoplesearch_info_fields():
 def test_tps_build_search_url_with_location():
     url = tps_build_search_url("Jane", "Smith", "Springfield", "IL")
     assert url == (
-        "https://www.truepeoplesearch.com/results"
-        "?name=Jane+Smith&citystatezip=Springfield+IL"
+        "https://www.truepeoplesearch.com/results?name=Jane+Smith&citystatezip=Springfield+IL"
     )
 
 
@@ -435,9 +434,7 @@ def test_tps_confidence_with_relatives():
         last_name="Smith",
         relatives=["Alice Smith", "Bob Smith"],
     )
-    score = tps_compute_confidence(
-        profile, "Jane Smith", "", "", found_relatives=["Alice Smith"]
-    )
+    score = tps_compute_confidence(profile, "Jane Smith", "", "", found_relatives=["Alice Smith"])
     # Name (0.4) + 1 relative (0.05) = 0.45
     assert score >= 0.4
 
