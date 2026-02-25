@@ -18,6 +18,16 @@ from dataremoval.brokers import (
     Difficulty,
     OptOutMethod,
 )
+from dataremoval.brokers._utils import (  # noqa: F401
+    DEFAULT_USER_AGENT,
+    HAS_PLAYWRIGHT,
+    check_url_status,
+    compute_confidence,
+    deduplicate,
+    launch_browser,
+    stealth_playwright,
+    wait_for_captcha,
+)
 from dataremoval.core.models import Listing, Profile
 
 

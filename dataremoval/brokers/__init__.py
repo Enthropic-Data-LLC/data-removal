@@ -42,6 +42,7 @@ class BrokerInfo(BaseModel):
     difficulty: Difficulty = Difficulty.MEDIUM
     expected_days: int = 3  # typical removal time
     recheck_days: int = 90  # how often to re-check
+    mail_address: str = ""  # postal address for mail-in opt-out
     notes: str = ""
 
 
