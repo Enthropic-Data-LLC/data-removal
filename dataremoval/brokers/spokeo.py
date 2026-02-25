@@ -29,14 +29,13 @@ from dataremoval.brokers._utils import (
     check_url_status,
     compute_confidence,
     deduplicate,
+    launch_browser,
+    stealth_playwright,
 )
 from dataremoval.core.models import Listing, Profile
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, Page
-
-if HAS_PLAYWRIGHT:
-    from playwright.async_api import async_playwright
+    from playwright.async_api import Page
 
 log = logging.getLogger(__name__)
 
@@ -110,8 +109,8 @@ class SpokeoPlugin(BrokerPlugin):
         opt_out_email = profile.email_addresses[0] if profile.email_addresses else ""
         listings: list[Listing] = []
 
-        async with async_playwright() as pw:
-            browser: Browser = await pw.chromium.launch(headless=True)
+        async with stealth_playwright() as pw:
+            browser = await launch_browser(pw, headless=True)
             try:
                 page: Page = await browser.new_page(user_agent=USER_AGENT)
                 for i, url in enumerate(urls):
@@ -176,27 +175,24 @@ class SpokeoPlugin(BrokerPlugin):
             return False
 
         try:
-            async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+            async with stealth_playwright() as pw:
+                browser = await launch_browser(pw, headless=True)
                 try:
                     page = await browser.new_page(user_agent=USER_AGENT)
                     await page.goto(
                         OPT_OUT_URL, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded"
                     )
 
-                    # Fill URL and email fields
-                    url_input = page.locator(
-                        'input[name="url"], input[placeholder*="spokeo.com"]'
-                    ).first
+                    # Fill URL field (placeholder: "Enter URL here")
+                    url_input = page.locator('input[placeholder*="Enter URL"]').first
                     await url_input.fill(listing.url)
 
-                    email_input = page.locator('input[name="email"], input[type="email"]').first
+                    # Fill email field (placeholder: "Enter email address here")
+                    email_input = page.locator('input[placeholder*="Enter email"]').first
                     await email_input.fill(email)
 
-                    # Click submit
-                    submit_btn = page.locator(
-                        'button:has-text("OPT OUT"), button[type="submit"]'
-                    ).first
+                    # Click OPT OUT button
+                    submit_btn = page.locator('button:has-text("OPT OUT")').first
                     await submit_btn.click()
 
                     # Wait for confirmation
