@@ -5,10 +5,10 @@ Difficulty: Easy
 Expected time: 48h
 
 Whitepages uses JavaScript-rendered pages and may have Cloudflare
-protection.  This plugin tries headless stealth mode first, then
-falls back to a visible browser for manual interaction.  The opt-out
-flow requires phone call verification — the plugin automates form
-filling and pauses for the user to answer the call.
+protection.  This plugin uses playwright-stealth to bypass bot
+detection headlessly.  The opt-out flow requires phone call
+verification — the plugin automates form filling up to that step,
+then opens a visible browser for the user to complete the call.
 """
 
 from __future__ import annotations
@@ -38,6 +38,13 @@ try:
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
+
+try:
+    from playwright_stealth import Stealth
+
+    HAS_STEALTH = True
+except ImportError:
+    HAS_STEALTH = False
 
 log = logging.getLogger(__name__)
 
@@ -193,10 +200,17 @@ def _deduplicate(listings: list[Listing]) -> list[Listing]:
 # ---------------------------------------------------------------------------
 
 
+def _stealth_playwright():
+    """Return a stealth-wrapped async_playwright context manager if available."""
+    pw_ctx = async_playwright()
+    if HAS_STEALTH:
+        return Stealth().use_async(pw_ctx)
+    return pw_ctx
+
+
 async def _launch_browser(pw: Playwright, *, headless: bool = True) -> Browser:
-    """Launch Chromium with stealth args when headless."""
-    args = list(_STEALTH_ARGS) if headless else []
-    return await pw.chromium.launch(headless=headless, args=args)
+    """Launch Chromium with stealth args."""
+    return await pw.chromium.launch(headless=headless, args=list(_STEALTH_ARGS))
 
 
 async def _is_captcha_page(page: Page) -> bool:
@@ -215,8 +229,7 @@ async def _wait_for_captcha(page: Page, description: str = "page") -> bool:
         return True
 
     log.warning(
-        "Captcha detected on %s. Please solve it in the browser window. "
-        "Waiting up to %d seconds...",
+        "Captcha detected on %s. Waiting up to %d seconds for resolution...",
         description,
         int(CAPTCHA_TIMEOUT),
     )
@@ -227,26 +240,12 @@ async def _wait_for_captcha(page: Page, description: str = "page") -> bool:
         elapsed += CAPTCHA_POLL_INTERVAL
 
         if not await _is_captcha_page(page):
-            log.info("Captcha solved. Continuing automation.")
+            log.info("Captcha cleared. Continuing automation.")
             await page.wait_for_load_state("domcontentloaded")
             return True
 
     log.error("Captcha timeout after %d seconds on %s", int(CAPTCHA_TIMEOUT), description)
     return False
-
-
-async def _needs_visible_browser(pw: Playwright, test_url: str) -> bool:
-    """Try stealth headless on *test_url*; return True if captcha appears."""
-    browser = await _launch_browser(pw, headless=True)
-    try:
-        page = await browser.new_page(user_agent=USER_AGENT)
-        try:
-            await page.goto(test_url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
-        except Exception:
-            return True  # navigation failure → fall back to visible
-        return await _is_captcha_page(page)
-    finally:
-        await browser.close()
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +309,8 @@ class WhitepagesPlugin(BrokerPlugin):
             recheck_days=90,
             notes=(
                 "Requires phone call verification for opt-out. "
-                "Stealth headless first; opens visible browser if needed. "
+                "Runs headless with playwright-stealth for search. "
+                "Opens visible browser for opt-out (phone verification). "
                 "Re-lists quarterly from public records."
             ),
         )
@@ -318,8 +318,8 @@ class WhitepagesPlugin(BrokerPlugin):
     async def search(self, profile: Profile) -> list[Listing]:
         """Search Whitepages for listings matching *profile*.
 
-        Tries headless stealth first.  If captcha appears, relaunches
-        a visible browser for the user to solve it.
+        Uses playwright-stealth for headless operation.  If a captcha
+        still appears, waits for it to be resolved.
         """
         if not HAS_PLAYWRIGHT:
             log.warning("Playwright not installed — skipping Whitepages search")
@@ -331,13 +331,8 @@ class WhitepagesPlugin(BrokerPlugin):
 
         listings: list[Listing] = []
 
-        async with async_playwright() as pw:
-            # Probe first URL to decide headless vs visible
-            use_visible = await _needs_visible_browser(pw, urls[0])
-            if use_visible:
-                log.info("Captcha detected — launching visible browser for manual solving")
-
-            browser = await _launch_browser(pw, headless=not use_visible)
+        async with _stealth_playwright() as pw:
+            browser = await _launch_browser(pw, headless=True)
             try:
                 page: Page = await browser.new_page(user_agent=USER_AGENT)
 
@@ -392,8 +387,8 @@ class WhitepagesPlugin(BrokerPlugin):
             return False
 
         try:
-            async with async_playwright() as pw:
-                # Always use visible browser for opt-out (needs phone interaction)
+            async with _stealth_playwright() as pw:
+                # Visible browser needed for phone verification interaction
                 browser = await _launch_browser(pw, headless=False)
                 try:
                     page = await browser.new_page(user_agent=USER_AGENT)
