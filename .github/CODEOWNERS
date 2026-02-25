@@ -1,0 +1,12 @@
+# Code Owners — these people/teams are auto-requested for PR review
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: maintainers team reviews everything
+*                           @enthropicdata/maintainers
+
+# Broker plugins: engineering team can review
+dataremoval/brokers/        @enthropicdata/engineering
+
+# CI and repo config: maintainers only
+.github/                    @enthropicdata/maintainers
+pyproject.toml              @enthropicdata/maintainers

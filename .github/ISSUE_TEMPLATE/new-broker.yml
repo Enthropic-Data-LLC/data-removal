@@ -1,0 +1,50 @@
+name: New Broker Plugin
+description: Add support for a new data broker site
+title: "broker: "
+labels: ["broker", "enhancement"]
+body:
+  - type: input
+    id: site_name
+    attributes:
+      label: Site Name
+      placeholder: e.g. Radaris
+    validations:
+      required: true
+  - type: input
+    id: site_url
+    attributes:
+      label: Site URL
+      placeholder: e.g. https://radaris.com
+    validations:
+      required: true
+  - type: dropdown
+    id: opt_out_method
+    attributes:
+      label: Opt-Out Method
+      options:
+        - Online form
+        - Email
+        - Mail/fax
+        - Account required
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: opt_out_url
+    attributes:
+      label: Opt-Out URL (if known)
+      placeholder: e.g. https://radaris.com/page/how-to-remove
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: Difficulty
+      options:
+        - Easy
+        - Medium
+        - Hard
+        - Unknown
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional Notes
+      description: Anything else — verification steps, re-listing behavior, gotchas
