@@ -11,6 +11,9 @@ Usage:
     dr profile delete <id> Delete a profile
 
     dr scan [--profile ID] [--broker ID]  Scan brokers for your data
+    dr listings list                      Show found listings with confidence
+    dr listings dismiss [IDs] [--below N] Dismiss non-matching listings
+    dr listings restore [IDs] [--all]     Restore dismissed listings
     dr remove [--profile ID]              Submit opt-out requests
     dr status [--profile ID]              Show removal status dashboard
     dr monitor [--profile ID]             Re-check for re-listings
@@ -51,8 +54,10 @@ app = typer.Typer(
 )
 profile_app = typer.Typer(help="Manage profiles to protect.")
 broker_app = typer.Typer(help="Browse supported broker sites.")
+listings_app = typer.Typer(help="View and manage found listings.")
 app.add_typer(profile_app, name="profile")
 app.add_typer(broker_app, name="brokers")
+app.add_typer(listings_app, name="listings")
 
 console = Console()
 
@@ -553,6 +558,180 @@ def monitor(
         f"[red]Re-listed: {results['re_listed']}[/red]  "
         f"[dim]Unknown: {results['unknown']}[/dim]"
     )
+
+
+# ---------------------------------------------------------------------------
+# Listings commands
+# ---------------------------------------------------------------------------
+
+
+@listings_app.command("list")
+def listings_list(
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    broker: str | None = typer.Option(None, "--broker", "-b"),
+    show_dismissed: bool = typer.Option(False, "--dismissed", help="Include dismissed listings"),
+):
+    """Show found listings with confidence scores and status."""
+    db = _db()
+    profile = _default_profile(db, profile_id)
+    listings = db.get_listings(profile_id=profile.id, broker_id=broker)
+    requests = db.get_requests(profile_id=profile.id)
+    db.close()
+
+    if not listings:
+        console.print("[dim]No listings found. Run[/dim] dr scan [dim]first.[/dim]")
+        return
+
+    # Build request lookup by listing_id
+    req_by_listing: dict[str, RemovalState] = {}
+    for r in requests:
+        req_by_listing[r.listing_id] = r.state
+
+    table = Table(title=f"Listings for {profile.full_name}")
+    table.add_column("#", style="dim")
+    table.add_column("Listing ID", style="cyan")
+    table.add_column("Broker")
+    table.add_column("Name Found")
+    table.add_column("Location")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Status")
+
+    state_colors = {
+        "discovered": "white",
+        "submitted": "yellow",
+        "confirmed": "green",
+        "monitoring": "green",
+        "failed": "red",
+        "skipped": "dim",
+        "re_listed": "red",
+    }
+
+    shown = 0
+    for i, listing in enumerate(listings, 1):
+        state = req_by_listing.get(listing.id)
+        state_str = state.value if state else "—"
+
+        if state == RemovalState.SKIPPED and not show_dismissed:
+            continue
+
+        color = state_colors.get(state_str, "white")
+        conf = f"{listing.confidence:.0%}" if listing.confidence else "—"
+
+        table.add_row(
+            str(i),
+            listing.id[:8],
+            listing.broker_id,
+            listing.found_name,
+            listing.found_location,
+            conf,
+            f"[{color}]{state_str}[/{color}]",
+        )
+        shown += 1
+
+    console.print(table)
+    skipped = len(listings) - shown
+    if skipped:
+        console.print(f"[dim]{skipped} dismissed listing(s) hidden. Use --dismissed to show.[/dim]")
+
+
+@listings_app.command("dismiss")
+def listings_dismiss(
+    listing_ids: list[str] = typer.Argument(None, help="Listing IDs to dismiss (prefix match)"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    below: float = typer.Option(
+        0.0, "--below", help="Dismiss all listings with confidence below this value (0-1)"
+    ),
+    broker: str | None = typer.Option(
+        None, "--broker", "-b", help="Only dismiss listings from this broker"
+    ),
+):
+    """Dismiss listings that aren't you. Skips them from opt-out processing.
+
+    Examples:
+        dr listings dismiss abc123 def456
+        dr listings dismiss --below 0.3
+        dr listings dismiss --below 0.5 --broker spokeo
+    """
+    db = _db()
+    profile = _default_profile(db, profile_id)
+    requests = db.get_requests(profile_id=profile.id)
+    listings = db.get_listings(profile_id=profile.id)
+
+    # Build lookup
+    listing_by_id: dict[str, object] = {li.id: li for li in listings}
+    actionable = [
+        r
+        for r in requests
+        if r.state in (RemovalState.DISCOVERED, RemovalState.FAILED)
+        and (broker is None or r.broker_id == broker)
+    ]
+
+    dismissed = 0
+
+    for req in actionable:
+        listing = listing_by_id.get(req.listing_id)
+        skip = False
+
+        # Match by ID prefix
+        if listing_ids:
+            for prefix in listing_ids:
+                if req.listing_id.startswith(prefix) or req.id.startswith(prefix):
+                    skip = True
+                    break
+
+        # Match by confidence threshold
+        if below > 0 and listing and listing.confidence < below:
+            skip = True
+
+        if skip:
+            req.transition(RemovalState.SKIPPED, "dismissed by user")
+            db.save_request(req)
+            name = listing.found_name if listing else "?"
+            console.print(f"  [dim]Dismissed:[/dim] {req.broker_id} — {name}")
+            dismissed += 1
+
+    db.close()
+
+    if dismissed:
+        console.print(f"\n[green]{dismissed} listing(s) dismissed.[/green]")
+    else:
+        console.print("[yellow]No listings matched. Use `dr listings list` to see IDs.[/yellow]")
+
+
+@listings_app.command("restore")
+def listings_restore(
+    listing_ids: list[str] = typer.Argument(None, help="Listing IDs to restore (prefix match)"),
+    profile_id: str | None = typer.Option(None, "--profile", "-p"),
+    all_dismissed: bool = typer.Option(False, "--all", help="Restore all dismissed listings"),
+):
+    """Restore previously dismissed listings back to discovered state."""
+    db = _db()
+    profile = _default_profile(db, profile_id)
+    requests = db.get_requests(profile_id=profile.id)
+
+    skipped = [r for r in requests if r.state == RemovalState.SKIPPED]
+    restored = 0
+
+    for req in skipped:
+        match = all_dismissed
+        if listing_ids:
+            for prefix in listing_ids:
+                if req.listing_id.startswith(prefix) or req.id.startswith(prefix):
+                    match = True
+                    break
+
+        if match:
+            req.transition(RemovalState.DISCOVERED, "restored by user")
+            db.save_request(req)
+            console.print(f"  [dim]Restored:[/dim] {req.broker_id} — {req.listing_id[:8]}")
+            restored += 1
+
+    db.close()
+
+    if restored:
+        console.print(f"\n[green]{restored} listing(s) restored.[/green]")
+    else:
+        console.print("[yellow]No dismissed listings matched.[/yellow]")
 
 
 # ---------------------------------------------------------------------------
