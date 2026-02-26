@@ -5,6 +5,7 @@ Usage:
     dr profile add         Add a new profile to protect
     dr profile list        List all profiles
     dr profile show <id>   Show profile details
+    dr profile edit <id>   Edit an existing profile
     dr profile delete <id> Delete a profile
 
     dr scan [--profile ID] [--broker ID]  Scan brokers for your data
@@ -96,6 +97,10 @@ def profile_add(
     state: str = typer.Option("", "--state"),
     phone: str = typer.Option("", "--phone"),
     email: str = typer.Option("", "--email"),
+    alias: list[str] | None = typer.Option(None, "--alias", "-a", help="Alias (repeatable)"),
+    relative: list[str] | None = typer.Option(
+        None, "--relative", "-r", help="Relative (repeatable)"
+    ),
 ):
     """Add a new profile to protect."""
     addresses = []
@@ -113,6 +118,8 @@ def profile_add(
         addresses=addresses,
         phone_numbers=phones,
         email_addresses=emails,
+        aliases=alias or [],
+        relatives=relative or [],
     )
 
     db = _db()
@@ -180,6 +187,89 @@ def profile_show(profile_id: str = typer.Argument(..., help="Profile ID")):
         f"  [bold]Requests:[/bold]        {json.dumps(stats['requests_by_state']) or '—'}",
     ]
     console.print(Panel("\n".join(lines), title=f"Profile: {profile_id}"))
+
+
+@profile_app.command("edit")
+def profile_edit(
+    profile_id: str = typer.Argument(..., help="Profile ID"),
+    first: str = typer.Option("", "--first", "-f"),
+    last: str = typer.Option("", "--last", "-l"),
+    middle: str = typer.Option(None, "--middle", "-m"),
+    dob: str = typer.Option(None, "--dob", help="Date of birth (YYYY-MM-DD)"),
+    city: str = typer.Option(None, "--city"),
+    state: str = typer.Option(None, "--state"),
+    phone: list[str] | None = typer.Option(
+        None, "--phone", help="Phone number (repeatable, replaces all)"
+    ),
+    email: list[str] | None = typer.Option(
+        None, "--email", help="Email address (repeatable, replaces all)"
+    ),
+    alias: list[str] | None = typer.Option(
+        None, "--alias", "-a", help="Alias (repeatable, replaces all)"
+    ),
+    relative: list[str] | None = typer.Option(
+        None, "--relative", "-r", help="Relative (repeatable, replaces all)"
+    ),
+    add_phone: list[str] | None = typer.Option(None, "--add-phone", help="Add phone number"),
+    add_email: list[str] | None = typer.Option(None, "--add-email", help="Add email address"),
+    add_alias: list[str] | None = typer.Option(None, "--add-alias", help="Add alias"),
+    add_relative: list[str] | None = typer.Option(None, "--add-relative", help="Add relative"),
+):
+    """Edit an existing profile."""
+    db = _db()
+    p = db.get_profile(profile_id)
+    if not p:
+        console.print(f"[red]Profile '{profile_id}' not found.[/red]")
+        raise typer.Exit(1)
+
+    if first:
+        p.first_name = first
+    if last:
+        p.last_name = last
+    if middle is not None:
+        p.middle_name = middle
+    if dob is not None:
+        p.date_of_birth = dob
+
+    # Address: update current address or add new one
+    if city is not None or state is not None:
+        current = next((a for a in p.addresses if a.current), None)
+        if current:
+            if city is not None:
+                current.city = city
+            if state is not None:
+                current.state = state
+        else:
+            p.addresses.append(Address(city=city or "", state=state or "", current=True))
+
+    # Replace-all flags
+    if phone is not None:
+        p.phone_numbers = phone
+    if email is not None:
+        p.email_addresses = email
+    if alias is not None:
+        p.aliases = alias
+    if relative is not None:
+        p.relatives = relative
+
+    # Append flags
+    p.phone_numbers.extend(add_phone or [])
+    p.email_addresses.extend(add_email or [])
+    p.aliases.extend(add_alias or [])
+    p.relatives.extend(add_relative or [])
+
+    db.save_profile(p)
+    db.close()
+
+    console.print(
+        Panel(
+            f"[bold green]Profile updated[/bold green]\n\n"
+            f"  ID:   {p.id}\n"
+            f"  Name: {p.full_name}\n\n"
+            f"Run [bold]dr profile show {p.id}[/bold] to see all fields.",
+            title="✓ Profile Updated",
+        )
+    )
 
 
 @profile_app.command("delete")
