@@ -53,15 +53,14 @@ USER_AGENT = DEFAULT_USER_AGENT
 PAGE_TIMEOUT_MS = 30_000
 SEARCH_DELAY_SECONDS = 3
 
-# CSS selectors for result cards (may need tuning against live DOM)
+# CSS selectors for result cards (verified against live DOM 2026-02)
 _RESULT_CARD_SEL = "div.card"
-_RESULT_LINK_SEL = "a[href*='/name/']"
-_RESULT_NAME_SEL = ".card-title, h4"
-_RESULT_LOCATION_SEL = ".card-location, .card-address"
-_RESULT_AGE_SEL = ".card-age"
+_RESULT_LINK_SEL = "a.link-to-details, h2.card-title a"
+_RESULT_NAME_SEL = "h2.card-title a span.larger"
+_RESULT_LOCATION_SEL = "h2.card-title a span.grey"
 
-# Profile detail URLs: /name/<First>-<Last>_<City>-<State>
-_PROFILE_URL_RE = re.compile(r"/name/[A-Za-z]+-[A-Za-z]+", re.IGNORECASE)
+# Profile detail URLs: /<First>-<Last>_id_<ID>
+_PROFILE_URL_RE = re.compile(r"/[A-Za-z]+-[A-Za-z]+(_id_|_)", re.IGNORECASE)
 
 # Captcha detection (Cloudflare + reCAPTCHA)
 _CAPTCHA_INDICATOR_SEL = (
@@ -130,7 +129,7 @@ async def _handle_captcha(page: Page, description: str = "page") -> bool:
 
 async def _extract_card(card, profile: Profile) -> Listing | None:
     """Extract listing data from a single result card element."""
-    # Detail link
+    # Detail link — prefer the "View Free Details" button, fall back to title link
     link_el = await card.query_selector(_RESULT_LINK_SEL)
     href = ""
     if link_el:
@@ -140,17 +139,27 @@ async def _extract_card(card, profile: Profile) -> Listing | None:
     if not _is_profile_url(href):
         return None
 
-    # Name
+    # Name (inside <h2 class="card-title"><a><span class="larger">)
     name_el = await card.query_selector(_RESULT_NAME_SEL)
     found_name = (await name_el.inner_text()).strip() if name_el else ""
 
-    # Location
+    # Location (inside <span class="grey">)
     loc_el = await card.query_selector(_RESULT_LOCATION_SEL)
     found_location = (await loc_el.inner_text()).strip() if loc_el else ""
 
-    # Age
-    age_el = await card.query_selector(_RESULT_AGE_SEL)
-    found_age = (await age_el.inner_text()).strip() if age_el else ""
+    # Age — text node after <h3>Age:</h3>, extract with JS
+    found_age = await card.evaluate(
+        """el => {
+            const h3s = el.querySelectorAll('h3');
+            for (const h3 of h3s) {
+                if (h3.textContent.trim().startsWith('Age')) {
+                    const next = h3.nextSibling;
+                    if (next && next.nodeType === 3) return next.textContent.trim();
+                }
+            }
+            return '';
+        }"""
+    )
 
     confidence = compute_confidence(profile, found_name, found_location, found_age)
 
