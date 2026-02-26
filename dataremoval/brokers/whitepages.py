@@ -415,9 +415,7 @@ class WhitepagesPlugin(BrokerPlugin):
 
                     if phone:
                         try:
-                            phone_input = page.locator(
-                                "#suppression-requests-phone-number"
-                            )
+                            phone_input = page.locator("#suppression-requests-phone-number")
                             await phone_input.click()
                             await phone_input.press_sequentially(
                                 re.sub(r"[^\d]", "", phone), delay=30
@@ -425,16 +423,12 @@ class WhitepagesPlugin(BrokerPlugin):
                             log.info("Auto-filled phone number for verification")
 
                             # Check the consent checkbox
-                            checkbox = page.locator(
-                                'input[type="checkbox"]'
-                            ).first
+                            checkbox = page.locator('input[type="checkbox"]').first
                             await checkbox.click()
                             await asyncio.sleep(0.5)
 
                             # Click "Call now to verify"
-                            call_btn = page.locator(
-                                'button:has-text("Call now to verify")'
-                            ).first
+                            call_btn = page.locator('button:has-text("Call now to verify")').first
                             await call_btn.click(timeout=10_000)
                             log.info(
                                 "Initiated verification call to %s",
