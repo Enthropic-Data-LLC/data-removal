@@ -60,8 +60,7 @@ _PROFILE_URL_RE = re.compile(r"/people/[A-Za-z-]+/[A-Za-z]+/P[a-zA-Z0-9]+")
 
 # Captcha detection (Cloudflare Turnstile + reCAPTCHA)
 _CAPTCHA_INDICATOR_SEL = (
-    "iframe[src*='challenge'], div.cf-turnstile, "
-    "iframe[src*='recaptcha'], div.g-recaptcha"
+    "iframe[src*='challenge'], div.cf-turnstile, iframe[src*='recaptcha'], div.g-recaptcha"
 )
 
 
@@ -113,9 +112,7 @@ def _is_profile_url(url: str) -> bool:
 
 
 async def _handle_captcha(page: Page, description: str = "page") -> bool:
-    return await wait_for_captcha(
-        page, description=description, selector=_CAPTCHA_INDICATOR_SEL
-    )
+    return await wait_for_captcha(page, description=description, selector=_CAPTCHA_INDICATOR_SEL)
 
 
 async def _navigate_opt_out_page(page: Page) -> bool:
@@ -147,9 +144,7 @@ async def _navigate_opt_out_page(page: Page) -> bool:
         return False
 
 
-async def _fill_search_form(
-    page: Page, first_name: str, last_name: str, state: str = ""
-) -> None:
+async def _fill_search_form(page: Page, first_name: str, last_name: str, state: str = "") -> None:
     """Fill the opt-out search form fields."""
     first_input = page.get_by_role("textbox", name="First Name")
     await first_input.click()
@@ -228,7 +223,9 @@ async def _extract_opt_out_results(page: Page, profile: Profile) -> list[Listing
             log.info("Found %d opt-out buttons (no card structure detected)", len(opt_out_els))
             for el in opt_out_els:
                 # Get surrounding text for context
-                parent = await el.evaluate_handle("el => el.closest('li, div, tr') || el.parentElement")
+                parent = await el.evaluate_handle(
+                    "el => el.closest('li, div, tr') || el.parentElement"
+                )
                 text = await parent.evaluate("el => el.textContent") if parent else ""
                 lines = [ln.strip() for ln in text.strip().split("\n") if ln.strip()]
                 found_name = lines[0] if lines else ""

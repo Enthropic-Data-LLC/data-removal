@@ -844,7 +844,7 @@ def test_int_info_fields():
     assert info.id == "intelius"
     assert info.name == "Intelius"
     assert info.url == "https://www.intelius.com"
-    assert info.opt_out_url == "https://www.intelius.com/opt-out"
+    assert info.opt_out_url == "https://suppression.peopleconnect.us/?brand=Intelius"
     assert info.difficulty.value == "medium"
     assert info.expected_days == 3
     assert info.mail_address == "PO Box 24025, Seattle, WA 98124"
