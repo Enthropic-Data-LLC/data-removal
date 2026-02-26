@@ -624,7 +624,7 @@ def test_bv_info_fields():
     assert info.name == "BeenVerified"
     assert info.url == "https://www.beenverified.com"
     assert info.opt_out_url == "https://www.beenverified.com/svc/optout/search/optouts"
-    assert info.difficulty.value == "easy"
+    assert info.difficulty.value == "medium"
     assert info.expected_days == 2
 
 
