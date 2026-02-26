@@ -223,6 +223,7 @@ class WhitepagesPlugin(BrokerPlugin):
             difficulty=Difficulty.EASY,
             expected_days=2,
             recheck_days=90,
+            requires_interaction=True,
             notes=(
                 "Requires phone call verification for opt-out. "
                 "Runs headless with playwright-stealth for search. "
@@ -402,25 +403,49 @@ class WhitepagesPlugin(BrokerPlugin):
                     except Exception:
                         log.debug("No reason step found, continuing")
 
-                    # Step 4: Phone verification — auto-fill if we have a number
+                    # Step 4: Phone verification
+                    # Wait for phone input to appear
+                    try:
+                        await page.wait_for_selector(
+                            "#suppression-requests-phone-number",
+                            timeout=10_000,
+                        )
+                    except Exception:
+                        log.debug("Phone input not found, may already be past this step")
+
                     if phone:
                         try:
                             phone_input = page.locator(
-                                'input[type="tel"], input[placeholder*="phone"], '
-                                'input[placeholder*="Phone"], input[name*="phone"]'
-                            ).first
+                                "#suppression-requests-phone-number"
+                            )
                             await phone_input.click()
                             await phone_input.press_sequentially(
                                 re.sub(r"[^\d]", "", phone), delay=30
                             )
                             log.info("Auto-filled phone number for verification")
-                            await asyncio.sleep(1)
+
+                            # Check the consent checkbox
+                            checkbox = page.locator(
+                                'input[type="checkbox"]'
+                            ).first
+                            await checkbox.click()
+                            await asyncio.sleep(0.5)
+
+                            # Click "Call now to verify"
+                            call_btn = page.locator(
+                                'button:has-text("Call now to verify")'
+                            ).first
+                            await call_btn.click(timeout=10_000)
+                            log.info(
+                                "Initiated verification call to %s",
+                                phone,
+                            )
                         except Exception:
-                            log.debug("Could not auto-fill phone number")
+                            log.debug("Could not auto-fill phone, user must complete manually")
 
                     log.warning(
-                        "Phone verification required. Complete the phone call "
-                        "verification in the browser window. Waiting up to %d seconds...",
+                        "Phone verification required. Answer the call and enter "
+                        "the verification code in the browser. Waiting up to %d seconds...",
                         int(PHONE_VERIFY_TIMEOUT),
                     )
 

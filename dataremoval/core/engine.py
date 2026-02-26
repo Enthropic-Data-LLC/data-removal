@@ -80,7 +80,12 @@ class Engine:
         broker_ids: list[str] | None = None,
         concurrency: int = 3,
     ) -> dict[str, int]:
-        """Submit opt-out requests for all DISCOVERED or FAILED listings."""
+        """Submit opt-out requests for all DISCOVERED or FAILED listings.
+
+        Brokers that require user interaction (e.g. phone verification) are
+        processed one at a time so the user can complete each step.
+        Non-interactive brokers run with the given concurrency limit.
+        """
         requests = self.db.get_requests(profile_id=profile_id)
         targets = [
             r
@@ -90,37 +95,59 @@ class Engine:
         ]
 
         results = {"submitted": 0, "failed": 0, "skipped": 0}
-        sem = asyncio.Semaphore(concurrency)
+
+        # Split into interactive (need user action) vs automated
+        interactive: list[RemovalRequest] = []
+        automated: list[RemovalRequest] = []
+        for req in targets:
+            plugin = registry.get(req.broker_id)
+            if plugin and plugin.info().requires_interaction:
+                interactive.append(req)
+            else:
+                automated.append(req)
 
         async def _submit_one(req: RemovalRequest) -> None:
-            async with sem:
-                plugin = registry.get(req.broker_id)
-                if not plugin:
-                    results["skipped"] += 1
-                    return
+            plugin = registry.get(req.broker_id)
+            if not plugin:
+                results["skipped"] += 1
+                return
 
-                listing = self._get_listing(req.listing_id)
-                if not listing:
-                    results["skipped"] += 1
-                    return
+            listing = self._get_listing(req.listing_id)
+            if not listing:
+                results["skipped"] += 1
+                return
 
-                self.on_event("remove_start", req.broker_id, listing.url)
-                try:
-                    success = await plugin.submit_opt_out(listing)
-                    if success:
-                        req.transition(RemovalState.SUBMITTED, "opt-out submitted")
-                        results["submitted"] += 1
-                    else:
-                        req.transition(RemovalState.FAILED, "submission returned false")
-                        results["failed"] += 1
-                except Exception as e:
-                    req.transition(RemovalState.FAILED, str(e))
+            self.on_event("remove_start", req.broker_id, listing.url)
+            try:
+                success = await plugin.submit_opt_out(listing)
+                if success:
+                    req.transition(RemovalState.SUBMITTED, "opt-out submitted")
+                    results["submitted"] += 1
+                else:
+                    req.transition(RemovalState.FAILED, "submission returned false")
                     results["failed"] += 1
+            except Exception as e:
+                req.transition(RemovalState.FAILED, str(e))
+                results["failed"] += 1
 
-                self.db.save_request(req)
-                self.on_event("remove_done", req.broker_id, req.state.value)
+            self.db.save_request(req)
+            self.on_event("remove_done", req.broker_id, req.state.value)
 
-        await asyncio.gather(*[_submit_one(r) for r in targets])
+        # Run automated brokers concurrently
+        if automated:
+            sem = asyncio.Semaphore(concurrency)
+
+            async def _submit_with_sem(req: RemovalRequest) -> None:
+                async with sem:
+                    await _submit_one(req)
+
+            await asyncio.gather(*[_submit_with_sem(r) for r in automated])
+
+        # Run interactive brokers one at a time so user can handle each
+        for req in interactive:
+            self.on_event("remove_interactive", req.broker_id)
+            await _submit_one(req)
+
         return results
 
     # ------------------------------------------------------------------
