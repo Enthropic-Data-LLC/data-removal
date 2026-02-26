@@ -52,9 +52,9 @@ app = typer.Typer(
     help="Remove your personal data from broker sites.",
     no_args_is_help=True,
 )
-profile_app = typer.Typer(help="Manage profiles to protect.")
-broker_app = typer.Typer(help="Browse supported broker sites.")
-listings_app = typer.Typer(help="View and manage found listings.")
+profile_app = typer.Typer(help="Manage profiles to protect.", invoke_without_command=True)
+broker_app = typer.Typer(help="Browse supported broker sites.", invoke_without_command=True)
+listings_app = typer.Typer(help="View and manage found listings.", invoke_without_command=True)
 app.add_typer(profile_app, name="profile")
 app.add_typer(broker_app, name="brokers")
 app.add_typer(listings_app, name="listings")
@@ -92,6 +92,13 @@ def _default_profile(db: Database, profile_id: str | None) -> Profile:
 # ---------------------------------------------------------------------------
 # Profile commands
 # ---------------------------------------------------------------------------
+
+
+@profile_app.callback()
+def profile_default(ctx: typer.Context):
+    """Manage profiles to protect."""
+    if ctx.invoked_subcommand is None:
+        profile_list()
 
 
 @profile_app.command("add")
@@ -565,6 +572,13 @@ def monitor(
 # ---------------------------------------------------------------------------
 
 
+@listings_app.callback()
+def listings_default(ctx: typer.Context):
+    """View and manage found listings."""
+    if ctx.invoked_subcommand is None:
+        listings_list()
+
+
 @listings_app.command("list")
 def listings_list(
     profile_id: str | None = typer.Option(None, "--profile", "-p"),
@@ -737,6 +751,13 @@ def listings_restore(
 # ---------------------------------------------------------------------------
 # Broker commands
 # ---------------------------------------------------------------------------
+
+
+@broker_app.callback()
+def brokers_default(ctx: typer.Context):
+    """Browse supported broker sites."""
+    if ctx.invoked_subcommand is None:
+        brokers_list()
 
 
 @broker_app.command("list")

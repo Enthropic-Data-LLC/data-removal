@@ -188,6 +188,24 @@ async def _extract_card(card, profile: Profile) -> Listing | None:
     )
 
 
+async def _extract_profile_phones(page: Page, url: str) -> list[str]:
+    """Visit a Whitepages profile page and extract visible phone numbers."""
+    phones: list[str] = []
+    try:
+        await page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
+        await asyncio.sleep(2)
+        # Landline numbers are visible (not behind paywall)
+        phone_links = await page.query_selector_all('a[href^="/phone/"]')
+        for link in phone_links:
+            text = (await link.inner_text()).strip()
+            # Match phone format like (509) 448-3843
+            if re.search(r"\(\d{3}\)\s*\d{3}-\d{4}", text):
+                phones.append(text)
+    except Exception:
+        log.debug("Could not extract phones from %s", url)
+    return phones
+
+
 # ---------------------------------------------------------------------------
 # Plugin class
 # ---------------------------------------------------------------------------
@@ -277,6 +295,14 @@ class WhitepagesPlugin(BrokerPlugin):
                         except Exception:
                             log.debug("Failed to extract card on %s", url)
                             continue
+
+                # Visit profile pages of high-confidence matches to grab phones
+                for listing in listings:
+                    if listing.confidence >= 0.5 and not listing.raw_data.get("phones"):
+                        phones = await _extract_profile_phones(page, listing.url)
+                        if phones:
+                            listing.raw_data["phones"] = phones
+                            log.debug("Collected %d phone(s) from %s", len(phones), listing.url)
             finally:
                 await browser.close()
 
@@ -285,16 +311,33 @@ class WhitepagesPlugin(BrokerPlugin):
     async def submit_opt_out(self, listing: Listing) -> bool:
         """Submit a removal request via Whitepages suppression form.
 
-        Automates the 5-step flow:
+        The Whitepages opt-out is a multi-step process:
           1. Paste profile URL → Next
-          2. Confirm identity → "Remove Me"
-          3. Select reason → Next
-          4. Phone verification (user must answer call and enter code)
-          5. Confirmation
+          2. Confirm identity → phone number verification
+          3. Confirmation
+
+        Uses type() instead of fill() to properly trigger Vue.js reactivity
+        on the suppression form.  Auto-fills the phone number from the
+        listing's raw_data (collected during scan) or profile phone numbers.
         """
         if not HAS_PLAYWRIGHT:
             log.warning("Playwright not installed — cannot submit opt-out")
             return False
+
+        # Get phone number for verification (prefer listing data, fall back to profile)
+        phone = ""
+        if listing.raw_data.get("phones"):
+            phone = listing.raw_data["phones"][0]
+        if not phone:
+            try:
+                from dataremoval.core.database import Database
+
+                db = Database()
+                profile = db.get_profile(listing.profile_id)
+                if profile and profile.phone_numbers:
+                    phone = profile.phone_numbers[0]
+            except Exception:
+                log.debug("Could not load profile phone numbers")
 
         try:
             async with stealth_playwright() as pw:
@@ -309,17 +352,23 @@ class WhitepagesPlugin(BrokerPlugin):
                         timeout=PAGE_TIMEOUT_MS,
                         wait_until="domcontentloaded",
                     )
+                    await asyncio.sleep(2)
 
                     if not await _handle_captcha(page, description="suppression page"):
                         log.error("Could not pass captcha on suppression page")
                         return False
 
-                    # Step 1: Paste listing URL and click Next
-                    url_input = page.locator('input[placeholder*="Copy and paste"]').first
-                    await url_input.fill(listing.url)
+                    # Step 1: Type listing URL (type() triggers Vue v-model, fill() does not)
+                    url_input = page.locator("#suppression-requests-person-url")
+                    await url_input.click()
+                    await url_input.press_sequentially(listing.url, delay=20)
+                    await asyncio.sleep(1)
 
                     next_btn = page.locator('button:has-text("Next")').first
                     await next_btn.click(timeout=PAGE_TIMEOUT_MS)
+
+                    # Wait for step to advance (step 2 should load)
+                    await asyncio.sleep(3)
                     await page.wait_for_load_state("domcontentloaded")
 
                     # Check for "not able to locate" error
@@ -331,36 +380,51 @@ class WhitepagesPlugin(BrokerPlugin):
                     if not await _handle_captcha(page, description="profile confirm"):
                         return False
 
-                    # Step 2: Click "Remove Me"
-                    remove_btn = page.locator('button:has-text("Remove Me")').first
-                    await remove_btn.click(timeout=PAGE_TIMEOUT_MS)
-
-                    # Step 3: Select reason and click Next
-                    reason_select = page.locator("select, combobox").first
+                    # Step 2: Confirm identity — look for "Remove Me" or proceed
                     try:
+                        remove_btn = page.locator('button:has-text("Remove Me")').first
+                        await remove_btn.click(timeout=10_000)
+                        await asyncio.sleep(2)
+                    except Exception:
+                        log.debug("No 'Remove Me' button found, continuing")
+
+                    # Step 3: Select reason if present
+                    try:
+                        reason_select = page.locator("select").first
                         await reason_select.select_option(
                             label="I just want to keep my information private",
-                            timeout=10_000,
+                            timeout=5_000,
                         )
+                        await asyncio.sleep(1)
+                        next_btn2 = page.locator('button:has-text("Next")').first
+                        await next_btn2.click(timeout=10_000)
+                        await asyncio.sleep(2)
                     except Exception:
-                        # Fall back to selecting by index
+                        log.debug("No reason step found, continuing")
+
+                    # Step 4: Phone verification — auto-fill if we have a number
+                    if phone:
                         try:
-                            await reason_select.select_option(index=4, timeout=5000)
+                            phone_input = page.locator(
+                                'input[type="tel"], input[placeholder*="phone"], '
+                                'input[placeholder*="Phone"], input[name*="phone"]'
+                            ).first
+                            await phone_input.click()
+                            await phone_input.press_sequentially(
+                                re.sub(r"[^\d]", "", phone), delay=30
+                            )
+                            log.info("Auto-filled phone number for verification")
+                            await asyncio.sleep(1)
                         except Exception:
-                            log.debug("Could not select reason, continuing")
+                            log.debug("Could not auto-fill phone number")
 
-                    next_btn2 = page.locator('button:has-text("Next")').first
-                    await next_btn2.click(timeout=PAGE_TIMEOUT_MS)
-
-                    # Step 4: Phone verification — user must interact
                     log.warning(
-                        "Phone verification required. Please enter your phone "
-                        "number, check the box, and click 'Call now to verify' "
-                        "in the browser window. Waiting up to %d seconds...",
+                        "Phone verification required. Complete the phone call "
+                        "verification in the browser window. Waiting up to %d seconds...",
                         int(PHONE_VERIFY_TIMEOUT),
                     )
 
-                    # Wait for Step 5 confirmation
+                    # Wait for completion confirmation
                     try:
                         await page.wait_for_selector(
                             "text=/opt.?out.*complete|request.*received|"
