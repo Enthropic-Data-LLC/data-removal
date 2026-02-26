@@ -14,6 +14,7 @@ form filling, but the user must solve Cloudflare/CAPTCHA challenges manually.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -184,10 +185,8 @@ async def _click_search_and_wait(page: Page) -> bool:
         return False
 
     # Wait for page to load results
-    try:
+    with contextlib.suppress(Exception):
         await page.wait_for_load_state("domcontentloaded", timeout=PAGE_TIMEOUT_MS)
-    except Exception:
-        pass
     await asyncio.sleep(5)
     return True
 
