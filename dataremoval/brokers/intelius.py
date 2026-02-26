@@ -1,14 +1,17 @@
 """Intelius broker plugin.
 
-Opt-out: Online form + email verification, or mail-in
+Opt-out: PeopleConnect Suppression Center + email verification
 Difficulty: Medium
 Expected time: 72h
 
-Intelius is part of PeopleConnect (also owns TruthFinder and Instant
-Checkmate).  Opting out from Intelius also removes data from those
-sister sites.  The opt-out flow goes through the "Do Not Sell My
-Personal Information" link and requires email verification.
+Intelius is part of PeopleConnect (also owns TruthFinder, Instant Checkmate,
+and USSearch).  Opting out via the PeopleConnect Suppression Center removes
+data from all sister sites.  The flow requires email verification, then
+identity verification (name, DOB, personal info questions with a ~2 min
+progress bar).
 
+Privacy center: https://www.intelius.com/privacy-center
+Suppression tool: https://suppression.peopleconnect.us/?brand=Intelius
 Mail-in: PO Box 24025, Seattle, WA 98124
 """
 
@@ -49,14 +52,16 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BASE_URL = "https://www.intelius.com"
-OPT_OUT_URL = f"{BASE_URL}/opt-out"
+SUPPRESSION_URL = "https://suppression.peopleconnect.us/?brand=Intelius"
+PRIVACY_CENTER_URL = f"{BASE_URL}/privacy-center"
 MAIL_ADDRESS = "PO Box 24025, Seattle, WA 98124"
 USER_AGENT = DEFAULT_USER_AGENT
-PAGE_TIMEOUT_MS = 30_000
+PAGE_TIMEOUT_MS = 60_000  # 60s — pages can be slow
+VERIFY_TIMEOUT = 600.0  # 10 min for email verify + identity verification
 SEARCH_DELAY_SECONDS = 3
 
-# CSS selectors for search result cards
-_RESULT_CARD_SEL = ".record-card, .search-result"
+# CSS selectors for search result cards on intelius.com people-search pages
+_RESULT_CARD_SEL = ".record-card, .search-result, [class*='result-card']"
 _RESULT_LINK_SEL = "a[href*='/people-search/']"
 _RESULT_NAME_SEL = ".record-name, .result-name, h4"
 _RESULT_LOCATION_SEL = ".record-location, .result-location"
@@ -72,7 +77,7 @@ _CAPTCHA_INDICATOR_SEL = (
 
 
 # ---------------------------------------------------------------------------
-# Pure helper functions
+# Pure helper functions (testable without browser)
 # ---------------------------------------------------------------------------
 
 
@@ -114,8 +119,12 @@ def _is_profile_url(url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Card extraction
+# Browser helpers
 # ---------------------------------------------------------------------------
+
+
+async def _handle_captcha(page: Page, description: str = "page") -> bool:
+    return await wait_for_captcha(page, description=description, selector=_CAPTCHA_INDICATOR_SEL)
 
 
 async def _extract_card(card, profile: Profile) -> Listing | None:
@@ -151,10 +160,6 @@ async def _extract_card(card, profile: Profile) -> Listing | None:
     )
 
 
-async def _handle_captcha(page: Page, description: str = "page") -> bool:
-    return await wait_for_captcha(page, description=description, selector=_CAPTCHA_INDICATOR_SEL)
-
-
 # ---------------------------------------------------------------------------
 # Plugin class
 # ---------------------------------------------------------------------------
@@ -168,15 +173,17 @@ class InteliusPlugin(BrokerPlugin):
             url=BASE_URL,
             category="people_search",
             opt_out_method=OptOutMethod.ONLINE_FORM,
-            opt_out_url=OPT_OUT_URL,
+            opt_out_url=SUPPRESSION_URL,
             difficulty=Difficulty.MEDIUM,
             expected_days=3,
             recheck_days=90,
             mail_address=MAIL_ADDRESS,
+            requires_interaction=True,
             notes=(
-                "Part of PeopleConnect — opting out also covers TruthFinder and "
-                "Instant Checkmate. Email verification required. Also supports "
-                "mail-in opt-out."
+                "Part of PeopleConnect — opting out also covers TruthFinder, "
+                "Instant Checkmate, and USSearch. Uses PeopleConnect Suppression "
+                "Center: email verification, then identity verification with "
+                "~2 min progress bar. Also supports mail-in opt-out."
             ),
         )
 
@@ -232,15 +239,33 @@ class InteliusPlugin(BrokerPlugin):
         return deduplicate(listings)
 
     async def submit_opt_out(self, listing: Listing) -> bool:
-        """Submit a removal request via Intelius opt-out page.
+        """Submit a removal request via PeopleConnect Suppression Center.
 
-        Navigates to the "Do Not Sell" opt-out flow: search for the
-        record, select it, and submit.  Email verification must be
-        completed separately by the user.
+        Flow:
+          1. Navigate to suppression.peopleconnect.us
+          2. Enter email, agree to terms, click Continue
+          3. User checks email and clicks verification link
+          4. Identity verification (name, DOB, personal info questions)
+          5. ~2 min progress bar while processing
+          6. Suppression confirmed
+
+        Covers Intelius, TruthFinder, InstantCheckmate, and USSearch.
         """
         if not HAS_PLAYWRIGHT:
             log.warning("Playwright not installed — cannot submit opt-out")
             return False
+
+        # Get email from profile
+        email = ""
+        try:
+            from dataremoval.core.database import Database
+
+            db = Database()
+            profile = db.get_profile(listing.profile_id)
+            if profile and profile.email_addresses:
+                email = profile.email_addresses[0]
+        except Exception:
+            log.debug("Could not load profile email")
 
         try:
             async with stealth_playwright() as pw:
@@ -248,59 +273,78 @@ class InteliusPlugin(BrokerPlugin):
                 try:
                     page = await browser.new_page(user_agent=USER_AGENT)
 
-                    # Navigate to opt-out page
-                    await page.goto(
-                        OPT_OUT_URL, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded"
+                    # Step 1: Navigate to PeopleConnect Suppression Center
+                    try:
+                        await page.goto(
+                            SUPPRESSION_URL,
+                            timeout=PAGE_TIMEOUT_MS,
+                            wait_until="domcontentloaded",
+                        )
+                    except Exception:
+                        log.info("Slow loading suppression page, continuing...")
+
+                    await asyncio.sleep(3)
+
+                    # Step 2: Fill email and agree to terms
+                    try:
+                        email_input = page.get_by_role("textbox", name="Email Address")
+                        await email_input.click()
+                        if email:
+                            await email_input.press_sequentially(email, delay=20)
+                            log.info("Auto-filled email: %s", email)
+                        else:
+                            log.info("No email in profile — please enter your email")
+                    except Exception:
+                        log.debug("Could not find email input")
+
+                    # Check terms checkbox
+                    try:
+                        checkbox = page.get_by_role("checkbox")
+                        await checkbox.click()
+                        await asyncio.sleep(0.5)
+                    except Exception:
+                        log.debug("Could not check terms checkbox")
+
+                    # Click Continue
+                    try:
+                        continue_btn = page.locator('button:has-text("Continue")').first
+                        await continue_btn.click(timeout=10_000)
+                        log.info("Clicked Continue — check your email for verification link")
+                        await asyncio.sleep(3)
+                    except Exception:
+                        log.debug("Could not click Continue")
+
+                    log.warning(
+                        "Check your email (%s) for the PeopleConnect verification link. "
+                        "Click the link, then complete identity verification in the browser. "
+                        "This includes name/DOB questions and a ~2 min progress bar. "
+                        "Waiting up to %d seconds...",
+                        email or "your email",
+                        int(VERIFY_TIMEOUT),
                     )
 
-                    if not await _handle_captcha(page, description="opt-out page"):
-                        log.error("Could not pass captcha on opt-out page")
+                    # Wait for suppression confirmation
+                    # The user needs to: check email → click link → verify identity → wait
+                    try:
+                        await page.wait_for_selector(
+                            "text=/suppression.*complete|successfully.*suppress|"
+                            "report.*suppress|request.*received|"
+                            "background.*report.*will|confirmation/i",
+                            timeout=VERIFY_TIMEOUT * 1000,
+                        )
+                        log.info(
+                            "Suppression submitted for %s (covers Intelius, "
+                            "TruthFinder, InstantCheckmate, USSearch)",
+                            listing.found_name,
+                        )
+                        return True
+                    except Exception:
+                        log.error(
+                            "Suppression not completed within timeout for %s",
+                            listing.found_name,
+                        )
                         return False
 
-                    # Fill search fields
-                    name_input = page.locator(
-                        'input[name="name"], input[placeholder*="name" i], input[name="firstName"]'
-                    ).first
-                    await name_input.fill(listing.found_name)
-
-                    # Click search
-                    search_btn = page.locator(
-                        'button:has-text("Search"), button:has-text("Find"), button[type="submit"]'
-                    ).first
-                    await search_btn.click(timeout=PAGE_TIMEOUT_MS)
-                    await page.wait_for_load_state("domcontentloaded")
-
-                    if not await _handle_captcha(page, description="search results"):
-                        return False
-
-                    # Select the record
-                    record_btn = page.locator(
-                        'button:has-text("This is me"), button:has-text("Select"), '
-                        'a:has-text("This is me")'
-                    ).first
-                    await record_btn.click(timeout=PAGE_TIMEOUT_MS)
-                    await page.wait_for_load_state("domcontentloaded")
-
-                    # Submit removal
-                    submit_btn = page.locator(
-                        'button:has-text("Submit"), button:has-text("Opt Out"), '
-                        'button:has-text("Remove"), button[type="submit"]'
-                    ).first
-                    await submit_btn.click(timeout=PAGE_TIMEOUT_MS)
-                    await page.wait_for_load_state("domcontentloaded")
-
-                    if not await _handle_captcha(page, description="confirmation"):
-                        return False
-
-                    # Wait for confirmation
-                    await page.wait_for_selector(
-                        "text=/check your email|request.*received|opt.?out.*submitted|"
-                        "removal.*confirmed|success/i",
-                        timeout=PAGE_TIMEOUT_MS,
-                    )
-
-                    log.info("Successfully submitted removal for %s", listing.url)
-                    return True
                 finally:
                     await browser.close()
 
