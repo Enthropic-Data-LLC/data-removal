@@ -6,6 +6,8 @@ Usage:
     dr profile list        List all profiles
     dr profile show <id>   Show profile details
     dr profile edit <id>   Edit an existing profile
+    dr profile export <id> Export profile to JSON for editing
+    dr profile import <f>  Import profile from JSON file
     dr profile delete <id> Delete a profile
 
     dr scan [--profile ID] [--broker ID]  Scan brokers for your data
@@ -268,6 +270,91 @@ def profile_edit(
             f"  Name: {p.full_name}\n\n"
             f"Run [bold]dr profile show {p.id}[/bold] to see all fields.",
             title="✓ Profile Updated",
+        )
+    )
+
+
+@profile_app.command("export")
+def profile_export(
+    profile_id: str = typer.Argument(..., help="Profile ID"),
+    output: str = typer.Option(
+        "", "--output", "-o", help="Output file (default: profile-<id>.json)"
+    ),
+):
+    """Export a profile to JSON for editing."""
+    db = _db()
+    p = db.get_profile(profile_id)
+    if not p:
+        console.print(f"[red]Profile '{profile_id}' not found.[/red]")
+        raise typer.Exit(1)
+    db.close()
+
+    if not output:
+        output = f"profile-{profile_id}.json"
+
+    data = p.model_dump()
+    # Remove internal timestamps so the file is clean for editing
+    data.pop("created_at", None)
+
+    Path(output).write_text(json.dumps(data, indent=2) + "\n")
+    console.print(f"[green]Exported to {output}[/green]")
+    console.print(f"Edit the file, then import with:  [bold]dr profile import {output}[/bold]")
+
+
+@profile_app.command("import")
+def profile_import(
+    file: str = typer.Argument(..., help="JSON file to import"),
+    merge: bool = typer.Option(
+        False, "--merge", help="Merge into existing profile (by ID) instead of creating new"
+    ),
+):
+    """Import a profile from a JSON file.
+
+    Use --merge to update an existing profile (matched by ID in the file).
+    Without --merge, creates a new profile (generates a new ID).
+    """
+    path = Path(file)
+    if not path.exists():
+        console.print(f"[red]File not found: {file}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    db = _db()
+
+    if merge:
+        pid = data.get("id", "")
+        if not pid:
+            console.print("[red]File has no 'id' field — cannot merge.[/red]")
+            raise typer.Exit(1)
+        existing = db.get_profile(pid)
+        if not existing:
+            console.print(f"[red]Profile '{pid}' not found — cannot merge.[/red]")
+            raise typer.Exit(1)
+        # Preserve created_at from existing profile
+        data["created_at"] = existing.created_at
+        profile = Profile(**data)
+    else:
+        # New profile — drop the old ID so a fresh one is generated
+        data.pop("id", None)
+        data.pop("created_at", None)
+        profile = Profile(**data)
+
+    db.save_profile(profile)
+    db.close()
+
+    action = "updated" if merge else "created"
+    console.print(
+        Panel(
+            f"[bold green]Profile {action}[/bold green]\n\n"
+            f"  ID:   {profile.id}\n"
+            f"  Name: {profile.full_name}\n\n"
+            f"Run [bold]dr profile show {profile.id}[/bold] to see all fields.",
+            title=f"✓ Profile {'Updated' if merge else 'Imported'}",
         )
     )
 

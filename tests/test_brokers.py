@@ -443,8 +443,8 @@ def test_fps_build_search_urls_from_profile():
 
 
 def test_fps_is_profile_url_valid():
-    assert fps_is_profile_url("https://www.fastpeoplesearch.com/name/Jane-Smith") is True
-    assert fps_is_profile_url("/name/Jane-Smith_Springfield-IL") is True
+    assert fps_is_profile_url("https://www.fastpeoplesearch.com/david-brown_id_G-123") is True
+    assert fps_is_profile_url("/Jane-Smith_Springfield-IL") is True
 
 
 def test_fps_is_profile_url_invalid():
@@ -554,19 +554,19 @@ def test_usph_info_fields():
     assert info.id == "usphonebook"
     assert info.name == "USPhonebook"
     assert info.url == "https://www.usphonebook.com"
-    assert info.opt_out_url == "https://www.usphonebook.com/opt-out/submit"
+    assert info.opt_out_url == "https://www.usphonebook.com/removal"
     assert info.difficulty.value == "easy"
     assert info.expected_days == 3
 
 
 def test_usph_build_search_url_with_state():
-    url = usph_build_search_url("Jane", "Smith", "Illinois")
-    assert url == "https://www.usphonebook.com/Jane-Smith/Illinois"
+    url = usph_build_search_url("Jane", "Smith", "Springfield", "IL")
+    assert url == "https://www.usphonebook.com/jane-smith/illinois/springfield"
 
 
 def test_usph_build_search_url_name_only():
     url = usph_build_search_url("Jane", "Smith")
-    assert url == "https://www.usphonebook.com/Jane-Smith"
+    assert url == "https://www.usphonebook.com/jane-smith"
 
 
 def test_usph_build_search_urls_from_profile():
@@ -577,12 +577,12 @@ def test_usph_build_search_urls_from_profile():
     )
     urls = usph_build_search_urls(profile)
     assert len(urls) == 1
-    assert "Jane-Smith/IL" in urls[0]
+    assert "jane-smith/illinois" in urls[0]
 
 
 def test_usph_is_profile_url_valid():
-    assert usph_is_profile_url("https://www.usphonebook.com/Jane-Smith/Illinois/abc123") is True
-    assert usph_is_profile_url("/Jane-Smith/IL/detail123") is True
+    assert usph_is_profile_url("https://www.usphonebook.com/david-brown/UEjM4kDMwQDO3IzR") is True
+    assert usph_is_profile_url("/jane-smith/UcjMxADOwQDN4QTM5IjR") is True
 
 
 def test_usph_is_profile_url_invalid():
