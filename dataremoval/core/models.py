@@ -125,7 +125,7 @@ class RemovalState(enum.StrEnum):
             S.MONITORING: [S.RE_LISTED, S.CONFIRMED],
             S.RE_LISTED: [S.SUBMITTED, S.SKIPPED],
             S.FAILED: [S.SUBMITTED, S.SKIPPED],
-            S.SKIPPED: [S.SUBMITTED],
+            S.SKIPPED: [S.SUBMITTED, S.DISCOVERED],
         }
 
 
