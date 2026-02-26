@@ -658,7 +658,7 @@ def listings_dismiss(
     listings = db.get_listings(profile_id=profile.id)
 
     # Build lookup
-    listing_by_id: dict[str, object] = {li.id: li for li in listings}
+    listing_by_id = {li.id: li for li in listings}
     actionable = [
         r
         for r in requests
